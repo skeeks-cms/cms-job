@@ -32,6 +32,29 @@ $logs->maxBytes = 1024;
 $imported = $reporter->addArtifact(CmsJobRunArtifact::TYPE_LOG, $source);
 releaseCheck($imported->size == 1024 && filesize($logs->resolve($imported->log_path)) === 1024, 'external log import is bounded');
 unlink($source);
+$csvSource = $app->runtimePath.'/report.csv';
+$csvBytes = "item;message\n".str_repeat("1;ошибка\n", 1000);
+file_put_contents($csvSource, $csvBytes);
+$csvArtifact = $reporter->addArtifact(CmsJobRunArtifact::TYPE_ERROR_REPORT, $csvSource);
+$csvPath = $logs->resolve($csvArtifact->log_path);
+releaseCheck(!$csvArtifact->cms_storage_file_id && substr($csvPath, -4) === '.csv'
+    && file_get_contents($csvPath) === $csvBytes, 'error report is private and never truncated by console limit');
+unlink($csvSource);
+// Two deliveries must retain independent files, even within the same second.
+$reports = [];
+foreach ([1, 2] as $item) {
+    $partReporter = new JobReporter(['run' => $run, 'definition' => $app->jobRegistry->get('release.fixture')]);
+    $append = new ReflectionMethod(JobReporter::class, 'appendErrorCsv');
+    $append->setAccessible(true);
+    $append->invoke($partReporter, 'site', $item, 'Ошибка', []);
+    $close = new ReflectionMethod(JobReporter::class, 'closeErrorCsv');
+    $close->setAccessible(true);
+    $close->invoke($partReporter);
+    $reports[] = CmsJobRunArtifact::find()->where(['cms_job_run_id' => $run->id])->orderBy(['id' => SORT_DESC])->one();
+}
+releaseCheck($reports[0]->name !== $reports[1]->name && $reports[0]->log_path !== $reports[1]->log_path
+    && is_file($logs->resolve($reports[0]->log_path)) && is_file($logs->resolve($reports[1]->log_path)),
+    'continuation CSV fragments have unique names and survive finalization');
 $artifact->updateAttributes(['expires_at' => time() - 1]);
 $run->updateAttributes(['status' => 'running']);
 releaseCheck($logs->cleanup() === 0 && is_file($path), 'expired active log preserved');
@@ -68,6 +91,13 @@ $app->set('request', new yii\web\Request(['cookieValidationKey' => 'isolated-fix
 $app->set('response', new yii\web\Response());
 $controller = (new ReflectionClass(skeeks\cms\job\controllers\AdminCmsJobRunController::class))->newInstanceWithoutConstructor();
 $controller->permissionName = 'test.admin';
+$response = $controller->actionLog($csvArtifact->id);
+releaseCheck(strpos($response->headers->get('Content-Type'), 'text/csv') === 0
+    && $response->headers->get('Cache-Control') === 'private, no-store', 'CSV download is private attachment');
+if (is_array($response->stream) && is_resource($response->stream[0])) { fclose($response->stream[0]); }
+$rejected = false;
+try { $controller->actionLogChunk($csvArtifact->id); } catch (yii\web\NotFoundHttpException $e) { $rejected = true; }
+releaseCheck($rejected, 'CSV cannot enter console streaming endpoint');
 $previewPath = $logs->resolve($imported->log_path);
 file_put_contents($previewPath, "\033[31m<script>alert(1)</script>\033[0m");
 $html = $controller->renderLogPreview($imported->id);
@@ -104,6 +134,9 @@ releaseCheck($response->headers->get('Cache-Control') === 'private, no-store'
 if (is_array($response->stream) && is_resource($response->stream[0])) { fclose($response->stream[0]); }
 $app->user->allowed = false;
 $rejected = false;
+try { $controller->actionLog($csvArtifact->id); } catch (yii\web\ForbiddenHttpException $e) { $rejected = true; }
+releaseCheck($rejected, 'CSV download requires permission');
+$rejected = false;
 try { $controller->actionLogChunk($imported->id); } catch (yii\web\ForbiddenHttpException $e) { $rejected = true; }
 releaseCheck($rejected, 'stream checks authorization');
 releaseCheck(strpos($controller->renderLogPreview($imported->id), 'Нет доступа') !== false, 'preview requires download permission');
@@ -118,6 +151,9 @@ releaseCheck($rejected, 'guest cannot download');
 $app->user->isGuest = false;
 $app->skeeks->site->id = 986;
 $rejected = false;
+try { $controller->actionLog($csvArtifact->id); } catch (yii\web\NotFoundHttpException $e) { $rejected = true; }
+releaseCheck($rejected, 'CSV download rejects another site');
+$rejected = false;
 try { $controller->actionLogChunk($imported->id); } catch (yii\web\NotFoundHttpException $e) { $rejected = true; }
 releaseCheck($rejected, 'stream rejects another site');
 releaseCheck(strpos($controller->renderLogPreview($imported->id), '<pre') === false, 'preview refuses another site');
@@ -125,6 +161,14 @@ $rejected = false;
 try { $controller->actionLog($imported->id); } catch (yii\web\NotFoundHttpException $e) { $rejected = true; }
 releaseCheck($rejected, 'download rejects another site');
 $app->skeeks->site->id = 987;
+$csvArtifact->updateAttributes(['expires_at' => time() - 1]);
+$rejected = false;
+try { $controller->actionLog($csvArtifact->id); } catch (yii\web\GoneHttpException $e) { $rejected = true; }
+releaseCheck($rejected, 'expired CSV download returns Gone');
+releaseCheck($logs->cleanup() === 1 && !file_exists($csvPath), 'expired CSV removed by diagnostic cleanup');
+$csvOrphan = $logs->create($run, 'csv');
+touch($csvOrphan, time() - 15 * 86400);
+releaseCheck($logs->cleanupOrphans() === 1 && !file_exists($csvOrphan), 'old orphan CSV removed');
 $imported->updateAttributes(['expires_at' => time() - 1]);
 releaseCheck(strpos($controller->renderLogPreview($imported->id), 'срок хранения истёк') !== false, 'expired preview has explicit state');
 $rejected = false;
@@ -136,4 +180,6 @@ $importedPath = $logs->resolve($imported->log_path);
 $run->updateAttributes(['retention_until' => time() - 1]);
 releaseCheck($app->runAction('cms-job/worker/cleanup') === 0
     && !file_exists($importedPath)
+    && !file_exists($csvPath)
+    && !file_exists($logs->root().'/'.$reports[0]->log_path)
     && !skeeks\cms\job\models\CmsJobRun::findOne($run->id), 'history cleanup also deletes private files');

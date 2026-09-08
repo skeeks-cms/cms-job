@@ -456,9 +456,10 @@ class AdminCmsJobRunController extends BackendModelStandartController
     /** Download by artifact ID, never by a client-supplied filesystem path. */
     public function actionLog($id)
     {
-        [$artifact, $run, $path] = $this->requirePrivateLog($id);
-        $response = \Yii::$app->response->sendFile($path, 'console-'.$run->id.'.log', [
-            'mimeType' => 'text/plain', 'inline' => false,
+        [$artifact, $run, $path] = $this->requirePrivateLog($id, true);
+        $isReport = $artifact->type === \skeeks\cms\job\models\CmsJobRunArtifact::TYPE_ERROR_REPORT;
+        $response = \Yii::$app->response->sendFile($path, $isReport ? 'errors-'.basename($path) : 'console-'.$run->id.'.log', [
+            'mimeType' => $isReport ? 'text/csv' : 'text/plain', 'inline' => false,
         ]);
         $response->headers->set('Cache-Control', 'private, no-store');
         $response->headers->set('X-Content-Type-Options', 'nosniff');
@@ -504,7 +505,7 @@ class AdminCmsJobRunController extends BackendModelStandartController
             ]);
     }
 
-    protected function requirePrivateLog($id): array
+    protected function requirePrivateLog($id, bool $allowReport = false): array
     {
         $user = \Yii::$app->user;
         if ($user->isGuest || !$user->can($this->permissionName)) {
@@ -514,7 +515,7 @@ class AdminCmsJobRunController extends BackendModelStandartController
         $run = $artifact ? $artifact->cmsJobRun : null;
         $site = \Yii::$app->skeeks->site;
         if (!$run || !$site || (int)$run->cms_site_id !== (int)$site->id
-            || $artifact->type !== \skeeks\cms\job\models\CmsJobRunArtifact::TYPE_LOG) {
+            || !in_array($artifact->type, $allowReport ? ['log', 'error-report'] : ['log'], true)) {
             throw new \yii\web\NotFoundHttpException();
         }
         $registry = \Yii::$app->jobs->getRegistry();

@@ -237,6 +237,16 @@ $isActive = !$model->getIsFinished();
                 $label = Html::encode($artifact->name);
                 $file = $artifact->storageFile;
 
+                if ($artifact->type === \skeeks\cms\job\models\CmsJobRunArtifact::TYPE_ERROR_REPORT && !$file) {
+                    $available = $artifact->log_path && (!$model->isFinished || !$artifact->expires_at || $artifact->expires_at > time());
+                    $items .= Html::tag('div', ($available
+                        ? Html::a($label, ['log', 'id' => $artifact->id], ['data-pjax' => '0'])
+                        : Html::tag('span', $label.' — отчёт недоступен или срок хранения истёк.'))
+                        .Html::tag('div', 'Отчёт об ошибках · '.Yii::$app->formatter->asShortSize((int)$artifact->size),
+                            ['class' => 'sx-collection-cell__secondary']), ['class' => 'sx-detail-section']);
+                    continue;
+                }
+
                 if ($artifact->type === \skeeks\cms\job\models\CmsJobRunArtifact::TYPE_LOG && !$file) {
                     $available = $artifact->log_path && (!$model->isFinished || !$artifact->expires_at || $artifact->expires_at > time());
                     $previewHtml = '';

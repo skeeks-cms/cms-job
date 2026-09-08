@@ -15,7 +15,6 @@ use skeeks\cms\job\models\CmsJobRun;
 use skeeks\cms\job\models\CmsJobRunArtifact;
 use skeeks\cms\job\models\CmsJobRunEvent;
 use yii\base\BaseObject;
-use yii\helpers\FileHelper;
 
 /**
  * Буферизованный отчёт о ходе выполнения.
@@ -291,8 +290,8 @@ class JobReporter extends BaseObject implements JobReporterInterface
             'expires_at' => isset($options['expires_at']) ? $options['expires_at'] : $this->defaultExpiresAt(),
         ]);
 
-        if ($type === CmsJobRunArtifact::TYPE_LOG && is_file($path)) {
-            $artifact->log_path = \Yii::$app->jobLogs->import($path, $this->run);
+        if (in_array($type, [CmsJobRunArtifact::TYPE_LOG, CmsJobRunArtifact::TYPE_ERROR_REPORT], true) && is_file($path)) {
+            $artifact->log_path = \Yii::$app->jobLogs->import($path, $this->run, $type === CmsJobRunArtifact::TYPE_ERROR_REPORT);
             $artifact->size = filesize(\Yii::$app->jobLogs->resolve($artifact->log_path));
             $artifact->expires_at = time() + max(1, (int)\Yii::$app->jobLogs->retentionDays) * 86400;
         } elseif (is_file($path)) {
@@ -471,10 +470,9 @@ class JobReporter extends BaseObject implements JobReporterInterface
     protected function appendErrorCsv($itemType, $itemId, $message, array $row)
     {
         if ($this->_errorCsv === null) {
-            $dir = \Yii::getAlias('@runtime/cms-job');
-            FileHelper::createDirectory($dir);
-
-            $this->_errorCsvPath = $dir.'/job-'.$this->run->id.'-errors.csv';
+            // Each delivery owns its own file; a stale worker cannot overwrite
+            // a continuation's diagnostics. Unregistered crash files expire as orphans.
+            $this->_errorCsvPath = \Yii::$app->jobLogs->create($this->run, 'csv');
             $this->_errorCsv = fopen($this->_errorCsvPath, 'w');
 
             if ($this->_errorCsv === false) {
@@ -514,7 +512,7 @@ class JobReporter extends BaseObject implements JobReporterInterface
         if ($this->_errorCsvRows > 0 && $this->_errorCsvPath && is_file($this->_errorCsvPath)) {
             try {
                 $this->addArtifact(CmsJobRunArtifact::TYPE_ERROR_REPORT, $this->_errorCsvPath, [
-                    'name' => 'errors-'.$this->run->id.'.csv',
+                    'name' => 'errors-'.basename($this->_errorCsvPath),
                     'mime_type' => 'text/csv',
                 ]);
             } catch (\Throwable $e) {
@@ -522,10 +520,7 @@ class JobReporter extends BaseObject implements JobReporterInterface
             }
         }
 
-        if ($this->_errorCsvPath && is_file($this->_errorCsvPath)) {
-            @unlink($this->_errorCsvPath);
-        }
-
+        // Already in private storage: retain it for download or orphan cleanup.
         $this->_errorCsvPath = null;
     }
 

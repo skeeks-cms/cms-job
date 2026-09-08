@@ -70,14 +70,17 @@ class JobLogStorage extends Component
         return str_replace('\\', '/', $root);
     }
 
-    public function create(CmsJobRun $run): string
+    public function create(CmsJobRun $run, string $extension = 'log'): string
     {
+        if (!in_array($extension, ['log', 'csv'], true)) {
+            throw new \InvalidArgumentException('Invalid diagnostic file extension.');
+        }
         if (!preg_match('/^[a-zA-Z0-9_-]{1,32}$/D', $run->queue_name) || $run->id < 1) {
             throw new \InvalidArgumentException('Invalid job log identity.');
         }
         // At most 1000 run IDs per date/bucket; separate files for retries.
         $key = $run->queue_name.'/'.gmdate('Y/m/d').'/'.intdiv((int)$run->id, 1000)
-            .'/'.$run->id.'-'.bin2hex(random_bytes(16)).'.log';
+            .'/'.$run->id.'-'.bin2hex(random_bytes(16)).'.'.$extension;
         $path = $this->root().'/'.$key;
         // Validate each existing ancestor before creating children (no symlink escape).
         $parent = $this->root();
@@ -103,7 +106,7 @@ class JobLogStorage extends Component
 
     public function resolve(string $key): ?string
     {
-        if (!preg_match('~^[a-zA-Z0-9_-]{1,32}/[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]+/[0-9]+-[a-f0-9]{32}\.log$~D', $key)) {
+        if (!preg_match('~^[a-zA-Z0-9_-]{1,32}/[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]+/[0-9]+-[a-f0-9]{32}\.(?:log|csv)$~D', $key)) {
             throw new \InvalidArgumentException('Invalid job log path.');
         }
         $path = $this->root().'/'.$key;
@@ -125,7 +128,7 @@ class JobLogStorage extends Component
     }
 
     /** Import a handler-supplied log, bounded in size; never upload to cms_storage_file. */
-    public function import(string $path, CmsJobRun $run): string
+    public function import(string $path, CmsJobRun $run, bool $errorReport = false): string
     {
         $real = realpath($path);
         if ($real && strpos(str_replace('\\', '/', $real), $this->root().'/') === 0) {
@@ -133,12 +136,14 @@ class JobLogStorage extends Component
             $this->resolve($key);
             return $key;
         }
-        $target = $this->create($run);
+        $target = $this->create($run, $errorReport ? 'csv' : 'log');
         $input = fopen($path, 'rb');
         $output = fopen($target, 'wb');
         try {
             if (!$input || !$output) { throw new \RuntimeException('Cannot import job log.'); }
-            if (stream_copy_to_stream($input, $output, max(1, (int)$this->maxBytes)) === false) {
+            // CSV is a complete report, not a truncated console tail. Stream it
+            // without loading it into memory and retain every row.
+            if (stream_copy_to_stream($input, $output, $errorReport ? -1 : max(1, (int)$this->maxBytes)) === false) {
                 throw new \RuntimeException('Cannot copy job log.');
             }
         } finally {
@@ -192,7 +197,7 @@ class JobLogStorage extends Component
         foreach ($iterator as $file) {
             if ($file->isLink() || !$file->isFile() || $file->getMTime() > $cutoff) { continue; }
             $key = substr(str_replace('\\', '/', $file->getPathname()), strlen($root) + 1);
-            if (!preg_match('~^[a-zA-Z0-9_-]{1,32}/[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]+/([0-9]+)-[a-f0-9]{32}\.log$~D', $key, $matches)) { continue; }
+            if (!preg_match('~^[a-zA-Z0-9_-]{1,32}/[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]+/([0-9]+)-[a-f0-9]{32}\.(?:log|csv)$~D', $key, $matches)) { continue; }
             if (CmsJobRunArtifact::find()->where(['log_path' => $key])->exists()) { continue; }
             $run = CmsJobRun::findOne($matches[1]);
             if ($run && !$run->isFinished) { continue; }
