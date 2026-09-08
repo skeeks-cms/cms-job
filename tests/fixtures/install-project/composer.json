@@ -1,0 +1,17 @@
+{
+    "name": "skeeks-tests/cms-job-install",
+    "type": "project",
+    "require": {"skeeks/cms-job": "dev-master"},
+    "repositories": [
+        {"type": "path", "url": "/shared-vendor/skeeks/cms-job", "options": {"symlink": false, "versions": {"skeeks/cms-job": "dev-master"}}},
+        {"type": "composer", "url": "https://asset-packagist.org"}
+    ],
+    "config": {
+        "allow-plugins": {
+            "yiisoft/config": true,
+            "yiisoft/yii2-composer": true,
+            "skeeks/cms-composer-update-plugin": false
+        }
+    },
+    "extra": {"config-plugin-options": {"source-directory": "config", "package-types": ["library", "yii2-extension"]}}
+}

@@ -8,9 +8,14 @@
 
 namespace skeeks\cms\job;
 
-use skeeks\cms\job\contracts\JobTransportInterface;
+use skeeks\cms\job\contracts\JobPublisherInterface;
 use skeeks\cms\job\models\CmsJobRun;
+use skeeks\cms\job\runtime\JobRunStore;
+use skeeks\cms\job\transport\JobTransportMessage;
+use skeeks\cms\job\JobTypeDefinition;
 use yii\base\Component;
+use yii\base\InvalidConfigException;
+use yii\db\IntegrityException;
 use yii\di\Instance;
 use yii\helpers\ArrayHelper;
 
@@ -29,16 +34,31 @@ class CmsJobComponent extends Component
     public $registry = 'jobRegistry';
 
     /**
-     * @var JobTransportInterface|string|array
+     * @var JobPublisherInterface|string|array
      */
-    public $transport = 'jobTransport';
+    public $publisher = 'jobPublisher';
+
+    /**
+     * @var JobRunStore|string|array
+     */
+    public $store = 'jobRunStore';
+
+    /**
+     * @var \yii\db\Connection|string|array
+     *
+     * Обязан быть тем же экземпляром соединения, что использует транспорт:
+     * на этом держится общая транзакция постановки.
+     */
+    public $db = 'db';
 
     public function init()
     {
         parent::init();
 
         $this->registry = Instance::ensure($this->registry, JobRegistry::class);
-        $this->transport = Instance::ensure($this->transport, JobTransportInterface::class);
+        $this->publisher = Instance::ensure($this->publisher, JobPublisherInterface::class);
+        $this->store = Instance::ensure($this->store, JobRunStore::class);
+        $this->db = Instance::ensure($this->db, \yii\db\Connection::class);
     }
 
     /**
@@ -103,13 +123,148 @@ class CmsJobComponent extends Component
             $run
         );
 
+        // Политики `skip` и `coalesce` обещают, что второй постановки не
+        // будет. Обещание должна держать база: без ключа дедупликации
+        // остаётся только проверка чтением, а она проигрывает гонке двух
+        // одновременных постановок. Если ключ не задан явно, выводим его из
+        // ресурса — единицей взаимного исключения всё равно являются данные.
+        if (!$run->dedup_key
+            && $run->resource_key
+            && in_array($run->overlap_policy, [CmsJobRun::OVERLAP_SKIP, CmsJobRun::OVERLAP_COALESCE], true)) {
+            $run->dedup_key = 'resource:'.$run->resource_key;
+        }
+
         if (!$this->applyOverlapPolicy($run)) {
             return null;
         }
 
-        $this->transport->push($run);
+        $delay = max(0, $run->available_at - time());
+
+        // Строка запуска и транспортное сообщение фиксируются вместе.
+        //
+        // DB-драйвер пишет сообщение тем же соединением, что и приложение,
+        // поэтому обе вставки попадают в одну транзакцию. Это и есть причина,
+        // по которой transactional outbox не нужен: невозможно состояние
+        // «запуск создан, а доставки не будет» или наоборот. При переходе на
+        // брокер вне базы это свойство исчезнет, и outbox придётся вводить.
+        try {
+            $this->db->transaction(function () use ($run, $definition, $delay) {
+                if (!$run->save()) {
+                    throw new \RuntimeException(
+                        'Не удалось создать запуск задания: '.print_r($run->errors, true)
+                    );
+                }
+
+                // root_id известен только после вставки, если задание корневое.
+                if (!$run->root_id) {
+                    $run->updateAttributes([
+                        'root_id' => $run->parent_id ? $run->parent_id : $run->id,
+                    ]);
+                }
+
+                $this->publishFor($run, $definition, $delay);
+            });
+        } catch (IntegrityException $e) {
+            // Гонку выиграла параллельная постановка: проверка чтением в
+            // applyOverlapPolicy() не видела активного задания, но уникальный
+            // индекс по dedup_active увидел. Это штатный исход, а не сбой, —
+            // именно ради него индекс и существует.
+            if (!$run->dedup_active) {
+                throw $e;
+            }
+
+            return $this->resolveLostOverlapRace($run, $definition, $payload, $delay);
+        }
 
         return $run;
+    }
+
+    /**
+     * Разобрать проигранную гонку постановки.
+     *
+     * @return CmsJobRun|null
+     */
+    protected function resolveLostOverlapRace(CmsJobRun $run, JobTypeDefinition $definition, array $payload, $delay)
+    {
+        $active = CmsJobRun::find()
+            ->andWhere(['dedup_active' => $run->dedup_key])
+            ->one();
+
+        if (in_array($run->overlap_policy, [CmsJobRun::OVERLAP_SKIP, CmsJobRun::OVERLAP_COALESCE], true)) {
+            if ($active) {
+                CmsJobRun::updateAllCounters(['skipped_runs' => 1], ['id' => $active->id]);
+            }
+
+            return null;
+        }
+
+        // Для `queue` и `replace` вторая постановка законна: она просто
+        // становится в очередь без признака активности, а сериализацию по
+        // ресурсу обеспечит блокировка.
+        $run->dedup_active = null;
+        $run->id = null;
+        $run->isNewRecord = true;
+
+        $this->db->transaction(function () use ($run, $definition, $delay) {
+            if (!$run->save()) {
+                throw new \RuntimeException(
+                    'Не удалось создать запуск задания: '.print_r($run->errors, true)
+                );
+            }
+
+            if (!$run->root_id) {
+                $run->updateAttributes([
+                    'root_id' => $run->parent_id ? $run->parent_id : $run->id,
+                ]);
+            }
+
+            $this->publishFor($run, $definition, $delay);
+        });
+
+        return $run;
+    }
+
+    /**
+     * Повторно опубликовать сообщение для уже существующего запуска.
+     *
+     * Нужно для отложенного бизнес-повтора: прежнее сообщение обработчик
+     * транспорта уже подтвердил, поэтому доставку следующей попытки надо
+     * запросить заново.
+     */
+    public function republish(CmsJobRun $run, $delay = 0)
+    {
+        if (!$this->registry->has($run->job_type)) {
+            return;
+        }
+
+        $this->publishFor($run, $this->registry->get($run->job_type), (int)$delay);
+    }
+
+    /**
+     * Отправить техническое сообщение в транспорт.
+     */
+    protected function publishFor(CmsJobRun $run, JobTypeDefinition $definition, $delay = 0)
+    {
+        if (!$this->publisher->supports($run->queue_name)) {
+            throw new InvalidConfigException(
+                "Полоса '{$run->queue_name}' типа '{$run->job_type}' не настроена в jobQueueFactory."
+            );
+        }
+
+        // TTR берём с запасом от предельной длительности попытки: если он
+        // окажется меньше реального времени работы, транспорт вернёт
+        // сообщение в очередь, пока операция ещё выполняется. Повторной
+        // работы это не вызовет — маркер владения не даст второму процессу
+        // тронуть чужой запуск, — но лишняя доставка бесполезна.
+        $ttr = (int)$definition->timeout + (int)$definition->leaseSeconds;
+
+        $this->publisher->publish(
+            new JobTransportMessage((int)$run->id),
+            $run->queue_name,
+            (int)$delay,
+            (int)$run->priority,
+            $ttr
+        );
     }
 
     /**

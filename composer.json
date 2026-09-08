@@ -18,7 +18,8 @@
     ],
     "require": {
         "php": ">=8.0",
-        "skeeks/cms": "*"
+        "skeeks/cms": "^6.4.9.25 || dev-master",
+        "yiisoft/yii2-queue": "^2.3.8"
     },
     "autoload": {
         "psr-4": {

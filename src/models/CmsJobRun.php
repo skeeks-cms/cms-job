@@ -52,6 +52,7 @@ use yii\helpers\Json;
  * @property int         $max_attempts
  * @property int         $available_at
  * @property int|null    $lease_until
+ * @property string|null $execution_token
  * @property string|null $worker_id
  * @property int|null    $worker_pid
  * @property int|null    $cancel_requested_at
@@ -284,6 +285,7 @@ class CmsJobRun extends \yii\db\ActiveRecord
 
             [['title', 'progress_message'], 'string', 'max' => 255],
             [['stage', 'worker_id', 'correlation_id', 'error_code'], 'string', 'max' => 64],
+            [['execution_token'], 'string', 'max' => 32],
             [['trigger_ref', 'dedup_key', 'dedup_active', 'resource_key'], 'string', 'max' => 190],
             [['payload_json', 'cursor_json', 'result_json', 'error_message'], 'string'],
 

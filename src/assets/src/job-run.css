@@ -1,0 +1,50 @@
+/*!
+ * Индикатор прогресса фоновой операции.
+ *
+ * Собственный примитив пакета: в общем контракте cms-backend полосы прогресса
+ * нет. Значения берутся из семантических токенов, поэтому светлая и тёмная
+ * темы работают без отдельных правил.
+ */
+.sx-job-progress {
+    height: 8px;
+    width: 100%;
+    margin: 8px 0;
+    overflow: hidden;
+    border-radius: var(--sx-radius-control, 4px);
+    background: var(--sx-color-surface-muted, #eee);
+}
+
+.sx-job-progress__bar {
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: var(--sx-color-accent, #337ab7);
+    transition: width 0.3s ease;
+}
+
+/* The outer surface owns the frame; flush tables must not draw a nested card. */
+html[data-sx-theme] [data-sx-job-run] .sx-surface__body--flush > .sx-data-table-wrapper {
+    border: 0;
+    border-radius: 0;
+}
+
+/* Palette/typography come from the backend's standard pre/code contract. */
+pre.sx-job-log-preview {
+    max-height: 320px;
+    max-width: 100%;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overscroll-behavior: contain;
+    margin-block: 8px 0;
+}
+
+.sx-job-log-preview:focus-visible {
+    outline: 2px solid var(--sx-color-accent);
+    outline-offset: 2px;
+}
+
+.sx-job-log-refresh {
+    display: inline-block;
+    margin-block: 8px;
+}

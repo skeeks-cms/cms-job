@@ -9,6 +9,7 @@
 namespace skeeks\cms\job\models;
 
 use skeeks\cms\models\CmsStorageFile;
+use yii\behaviors\TimestampBehavior;
 
 /**
  * Файл, произведённый заданием: результат, отчёт об ошибках, исходник, лог.
@@ -25,6 +26,7 @@ use skeeks\cms\models\CmsStorageFile;
  * @property int|null        $size
  * @property int             $created_at
  * @property int|null        $expires_at
+ * @property string|null     $log_path Relative private log key, never a public URL.
  *
  * @property CmsJobRun       $cmsJobRun
  * @property CmsStorageFile  $storageFile
@@ -47,6 +49,20 @@ class CmsJobRunArtifact extends \yii\db\ActiveRecord
     /**
      * @inheritdoc
      */
+    public function behaviors()
+    {
+        return [
+            TimestampBehavior::class => [
+                'class' => TimestampBehavior::class,
+                'createdAtAttribute' => 'created_at',
+                'updatedAtAttribute' => false,
+            ],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
     public function rules()
     {
         return [
@@ -54,10 +70,8 @@ class CmsJobRunArtifact extends \yii\db\ActiveRecord
             [['cms_job_run_id', 'cms_storage_file_id', 'size', 'created_at', 'expires_at'], 'integer'],
             [['type'], 'string', 'max' => 32],
             [['name'], 'string', 'max' => 255],
+            [['log_path'], 'string', 'max' => 190],
             [['mime_type'], 'string', 'max' => 128],
-            [['created_at'], 'default', 'value' => function () {
-                return time();
-            }],
         ];
     }
 

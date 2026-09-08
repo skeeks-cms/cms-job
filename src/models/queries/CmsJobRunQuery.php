@@ -9,17 +9,27 @@
 namespace skeeks\cms\job\models\queries;
 
 use skeeks\cms\job\models\CmsJobRun;
-use yii\db\ActiveQuery;
+use skeeks\cms\query\CmsActiveQuery;
 
 /**
+ * Наследуется от CmsActiveQuery, а не от голого yii\db\ActiveQuery: у таблицы
+ * есть `cms_site_id`, а стандартный backend-контроллер ограничивает выборку
+ * текущим сайтом через `cmsSite()`.
+ *
  * @see CmsJobRun
  */
-class CmsJobRunQuery extends ActiveQuery
+class CmsJobRunQuery extends CmsActiveQuery
 {
     /**
+     * Незавершённые прогоны.
+     *
+     * Намеренно НЕ называется `active()`: у родительского CmsActiveQuery этот
+     * метод фильтрует по колонке `is_active`, которой здесь нет, и совпадение
+     * имён при разном смысле только путало бы.
+     *
      * @return $this
      */
-    public function active()
+    public function unfinished()
     {
         return $this->andWhere(['status' => CmsJobRun::activeStatuses()]);
     }
@@ -64,14 +74,6 @@ class CmsJobRunQuery extends ActiveQuery
     public function forSite($siteId)
     {
         return $this->andWhere(['cms_site_id' => $siteId]);
-    }
-
-    /**
-     * @return $this
-     */
-    public function createdBy($userId)
-    {
-        return $this->andWhere(['created_by' => $userId]);
     }
 
     /**

@@ -9,7 +9,6 @@
 namespace skeeks\cms\job\runtime;
 
 use skeeks\cms\job\models\CmsJobLock;
-use skeeks\cms\job\models\CmsJobRun;
 use yii\base\Component;
 use yii\db\Exception as DbException;
 
@@ -19,12 +18,16 @@ use yii\db\Exception as DbException;
  * Единица взаимного исключения — данные, а не строка расписания. Полное и
  * инкрементальное обновление одного поставщика это разные задания, но один
  * ресурс, поэтому флаг вида `is_running` на строке агента их не разводит.
+ *
+ * Блокировка принадлежит конкретному захвату, а не запуску: идентификатор
+ * запуска переживает перехват, маркер владения — нет. Иначе прежний воркер
+ * снял бы блокировку, которую уже держит новый владелец того же запуска.
  */
 class LockManager extends Component
 {
     /**
      * @var int Через сколько секунд считать брошенную блокировку протухшей,
-     *          если задание не продлевает аренду.
+     *          если владелец не продлевает её.
      */
     public $defaultTtl = 300;
 
@@ -36,7 +39,7 @@ class LockManager extends Component
      *
      * @return bool
      */
-    public function acquire($resourceKey, CmsJobRun $run, $ttl = null)
+    public function acquire($resourceKey, $runId, $executionToken, $workerId = null, $ttl = null)
     {
         if (!$resourceKey) {
             return true;
@@ -50,8 +53,9 @@ class LockManager extends Component
         try {
             \Yii::$app->db->createCommand()->insert(CmsJobLock::tableName(), [
                 'resource_key' => $resourceKey,
-                'cms_job_run_id' => $run->id,
-                'worker_id' => $run->worker_id,
+                'cms_job_run_id' => $runId,
+                'execution_token' => $executionToken,
+                'worker_id' => $workerId,
                 'acquired_at' => $now,
                 'expires_at' => $now + $ttl,
             ])->execute();
@@ -63,9 +67,15 @@ class LockManager extends Component
     }
 
     /**
-     * @return bool
+     * Продлить свою блокировку.
+     *
+     * Вызывается вместе с продлением аренды запуска. Без этого длинная
+     * операция теряла бы блокировку на середине: TTL истекал, уборка снимала
+     * запись, и параллельная задача заходила на тот же ресурс.
+     *
+     * @return bool false — блокировка уже не наша
      */
-    public function extend($resourceKey, $ttl = null)
+    public function extend($resourceKey, $executionToken, $ttl = null)
     {
         if (!$resourceKey) {
             return true;
@@ -73,29 +83,33 @@ class LockManager extends Component
 
         $ttl = $ttl === null ? $this->defaultTtl : (int)$ttl;
 
-        $affected = CmsJobLock::updateAll(
-            ['expires_at' => time() + $ttl],
-            ['resource_key' => $resourceKey]
-        );
+        $condition = ['resource_key' => $resourceKey, 'execution_token' => $executionToken];
 
-        return $affected === 1;
+        $affected = CmsJobLock::updateAll(['expires_at' => time() + $ttl], $condition);
+
+        if ($affected >= 1) {
+            return true;
+        }
+
+        // Ноль изменённых строк не означает потерю блокировки: MySQL считает
+        // изменённые строки, а не совпавшие, и повторное продление в ту же
+        // секунду не меняет `expires_at`. Проверяем владение явно.
+        return CmsJobLock::find()->where($condition)->exists();
     }
 
     /**
-     * Освободить ресурс. Снимается только своя блокировка.
+     * Освободить ресурс. Снимается только блокировка этого захвата.
      */
-    public function release($resourceKey, CmsJobRun $run = null)
+    public function release($resourceKey, $executionToken)
     {
         if (!$resourceKey) {
             return;
         }
 
-        $condition = ['resource_key' => $resourceKey];
-        if ($run !== null) {
-            $condition['cms_job_run_id'] = $run->id;
-        }
-
-        CmsJobLock::deleteAll($condition);
+        CmsJobLock::deleteAll([
+            'resource_key' => $resourceKey,
+            'execution_token' => $executionToken,
+        ]);
     }
 
     /**

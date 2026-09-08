@@ -8,6 +8,7 @@
 
 namespace skeeks\cms\job\models;
 
+use yii\behaviors\TimestampBehavior;
 use yii\helpers\Json;
 
 /**
@@ -46,6 +47,23 @@ class CmsJobRunEvent extends \yii\db\ActiveRecord
 
     /**
      * @inheritdoc
+     *
+     * Время проставляется поведением, а не правилом по умолчанию: события
+     * пишутся через save(false), а валидаторы при этом не выполняются.
+     */
+    public function behaviors()
+    {
+        return [
+            TimestampBehavior::class => [
+                'class' => TimestampBehavior::class,
+                'createdAtAttribute' => 'created_at',
+                'updatedAtAttribute' => false,
+            ],
+        ];
+    }
+
+    /**
+     * @inheritdoc
      */
     public function rules()
     {
@@ -60,9 +78,6 @@ class CmsJobRunEvent extends \yii\db\ActiveRecord
             ],
             [['level'], 'default', 'value' => self::LEVEL_INFO],
             [['stage'], 'string', 'max' => 64],
-            [['created_at'], 'default', 'value' => function () {
-                return time();
-            }],
         ];
     }
 

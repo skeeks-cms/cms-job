@@ -9,6 +9,7 @@
 namespace skeeks\cms\job\runtime;
 
 use skeeks\cms\job\contracts\JobReporterInterface;
+use skeeks\cms\job\exceptions\JobFencedException;
 use skeeks\cms\job\JobTypeDefinition;
 use skeeks\cms\job\models\CmsJobRun;
 use skeeks\cms\job\models\CmsJobRunArtifact;
@@ -43,6 +44,21 @@ class JobReporter extends BaseObject implements JobReporterInterface
     public $context;
 
     /**
+     * @var JobRunStore
+     */
+    public $store;
+
+    /**
+     * @var LockManager
+     */
+    public $lockManager;
+
+    /**
+     * @var string Маркер владения текущим захватом.
+     */
+    public $executionToken;
+
+    /**
      * @var int Минимальный интервал между сохранениями прогресса, мс.
      */
     public $flushIntervalMs = 1000;
@@ -71,6 +87,11 @@ class JobReporter extends BaseObject implements JobReporterInterface
      * @var bool
      */
     private $_cancelled = false;
+
+    /**
+     * @var bool Запуск перехвачен: писать в него больше нельзя.
+     */
+    private $_fenced = false;
 
     /**
      * @var int Сколько событий уже записано в ленту этого прогона.
@@ -270,7 +291,11 @@ class JobReporter extends BaseObject implements JobReporterInterface
             'expires_at' => isset($options['expires_at']) ? $options['expires_at'] : $this->defaultExpiresAt(),
         ]);
 
-        if (is_file($path)) {
+        if ($type === CmsJobRunArtifact::TYPE_LOG && is_file($path)) {
+            $artifact->log_path = \Yii::$app->jobLogs->import($path, $this->run);
+            $artifact->size = filesize(\Yii::$app->jobLogs->resolve($artifact->log_path));
+            $artifact->expires_at = time() + max(1, (int)\Yii::$app->jobLogs->retentionDays) * 86400;
+        } elseif (is_file($path)) {
             $artifact->cms_storage_file_id = $this->storeFile($path, $artifact->name);
         }
 
@@ -323,7 +348,14 @@ class JobReporter extends BaseObject implements JobReporterInterface
     /**
      * Один UPDATE: счётчики, прогресс, курсор и продление аренды.
      *
+     * Запись идёт под маркером владения. Если запуск уже перехвачен другим
+     * воркером, UPDATE не затрагивает ни одной строки — тогда писать дальше
+     * нельзя, и обработчик останавливается исключением. Без этой проверки
+     * очнувшийся после зависания процесс затирал бы прогресс нового владельца
+     * и продлевал ему аренду.
+     *
      * @param bool $force сохранить, не дожидаясь истечения интервала
+     * @throws JobFencedException запуск больше не принадлежит этому процессу
      */
     public function flush($force = false)
     {
@@ -346,13 +378,56 @@ class JobReporter extends BaseObject implements JobReporterInterface
             'skipped_count' => (int)$this->run->skipped_count,
             'cursor_json' => $this->run->cursor_json,
             'result_json' => $this->run->result_json,
-            'lease_until' => time() + $this->definition->leaseSeconds,
-            'updated_at' => time(),
         ];
 
-        CmsJobRun::updateAll($values, ['id' => $this->run->id]);
+        $owned = $this->store->writeProgress(
+            (int)$this->run->id,
+            (string)$this->executionToken,
+            $values,
+            (int)$this->definition->leaseSeconds
+        );
+
+        if (!$owned) {
+            $this->_fenced = true;
+
+            throw new JobFencedException(
+                "Запуск #{$this->run->id} перехвачен другим воркером; текущий процесс остановлен."
+            );
+        }
+
+        // Блокировка ресурса живёт ровно столько же, сколько аренда запуска.
+        //
+        // Потеря блокировки не менее опасна, чем перехват самого запуска: с
+        // этого момента в тот же ресурс уже может зайти параллельная операция,
+        // и продолжать работу нельзя. Останавливаемся тем же способом.
+        if ($this->run->resource_key) {
+            $held = $this->lockManager->extend(
+                $this->run->resource_key,
+                (string)$this->executionToken,
+                (int)$this->definition->leaseSeconds * 3
+            );
+
+            if (!$held) {
+                $this->_fenced = true;
+
+                throw new JobFencedException(
+                    "Блокировка ресурса '{$this->run->resource_key}' потеряна запуском"
+                    ." #{$this->run->id}; текущий процесс остановлен."
+                );
+            }
+        }
 
         $this->_pending = [];
+    }
+
+    /**
+     * Потерял ли этот процесс право писать в запуск.
+     *
+     * @return bool
+     */
+    public function isFenced()
+    {
+        return $this->_fenced;
     }
 
     /**
