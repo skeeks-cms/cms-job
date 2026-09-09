@@ -9,13 +9,14 @@
         const button = root.querySelector('[data-sx-job-start]');
         const status = root.querySelector('[data-sx-job-status]');
         const result = root.querySelector('[data-sx-job-result]');
-        let pending = false, unknown = true, timer, windowUrl;
+        let pending = false, unknown = true, running = false, timer, windowUrl;
         async function request(start) {
             if (pending || !root.isConnected) return;
             clearTimeout(timer);
             pending = true;
             button.disabled = true;
-            button.setAttribute('aria-busy', 'true');
+            // Background polling must not flash the backend button spinner.
+            if (start || unknown) button.setAttribute('aria-busy', 'true');
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 15000);
             try {
@@ -35,6 +36,7 @@
                 if (!payload.success) throw new Error('Rejected');
                 const run = payload.run;
                 const active = run && !run.finished;
+                running = !!active && run.status === 'running';
                 unknown = false;
                 button.textContent = active ? run.label : root.dataset.label;
                 button.disabled = !!active;
@@ -63,6 +65,7 @@
                 if (active) timer = setTimeout(() => request(false), document.hidden ? 10000 : 2500);
             } catch (error) {
                 unknown = true;
+                running = false;
                 status.hidden = false;
                 status.textContent = 'Не удалось проверить состояние. Проверьте статус перед повторным запуском.';
                 button.textContent = 'Проверить статус';
@@ -70,7 +73,8 @@
             } finally {
                 clearTimeout(timeout);
                 pending = false;
-                button.removeAttribute('aria-busy');
+                if (running) button.setAttribute('aria-busy', 'true');
+                else button.removeAttribute('aria-busy');
             }
         }
         button.addEventListener('click', () => request(!unknown));
