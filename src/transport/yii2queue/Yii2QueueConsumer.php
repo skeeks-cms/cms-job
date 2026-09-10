@@ -146,6 +146,8 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
             $executionToken = bin2hex(random_bytes(16));
             $command = [
                 PHP_BINARY,
+                '-d',
+                'memory_limit='.ini_get('memory_limit'),
                 $script,
                 'cms-job/worker/exec',
                 (string)$id,
@@ -180,13 +182,13 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
                 return $this->handleHardTimeout($queue, $message, (int)$ttr, $executionToken, $id, $attempt);
             } catch (ProcessSignaledException $e) {
                 return $this->handleChildCrash($queue, $message, 128 + $process->getTermSignal(), $childPid,
-                    $process->getErrorOutput(), $id, $attempt);
+                    $process->getErrorOutput(), $id, $attempt, $executionToken);
             }
 
             // Прочие коды возврата означают, что дочерний процесс умер, не
             // дойдя до штатного завершения: сегфолт, OOM-killer, fatal error.
             if (!in_array($exitCode, [self::EXEC_DONE, self::EXEC_RETRY], true)) {
-                return $this->handleChildCrash($queue, $message, $exitCode, $childPid, $process->getErrorOutput(), $id, $attempt);
+                return $this->handleChildCrash($queue, $message, $exitCode, $childPid, $process->getErrorOutput(), $id, $attempt, $executionToken);
             }
 
             return $exitCode === self::EXEC_DONE;
@@ -228,7 +230,7 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
      *
      * Поэтому решение принимается по фактическому состоянию запуска.
      */
-    protected function handleChildCrash(CliQueue $queue, $message, $exitCode, $childPid, $stderr, $id, $attempt): bool
+    protected function handleChildCrash(CliQueue $queue, $message, $exitCode, $childPid, $stderr, $id, $attempt, ?string $executionToken = null): bool
     {
         \Yii::error(
             "Дочерний процесс задания (pid {$childPid}) завершился с кодом "
@@ -260,10 +262,8 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
             return false;
         }
 
-        // Запуск захвачен и остался работающим: аренда истечёт, и его штатно
-        // разберёт уборка, которая умеет отличать идемпотентный тип от
-        // неидемпотентного. Наблюдаемость при этом сохраняется — строка видна
-        // как выполняющаяся, а не исчезает.
+        // The parent observed child termination; finalize only its original token.
+        \Yii::$app->jobRunner->failChildCrash((int)$run->id, (int)$exitCode, $executionToken);
         return true;
     }
 

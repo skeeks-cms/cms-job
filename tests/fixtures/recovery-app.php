@@ -14,6 +14,9 @@ class RecoveryTestHandler extends AbstractJobHandler
 {
     public function run(JobContext $context, JobReporterInterface $reporter): void
     {
+        if ($context->get('mode') === 'memory-limit') {
+            $reporter->setResult(['memory_limit' => ini_get('memory_limit')]);
+        }
         if ($context->get('mode') === 'pause') {
             usleep(600000);
         }

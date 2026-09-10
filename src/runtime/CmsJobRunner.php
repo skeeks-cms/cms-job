@@ -218,6 +218,19 @@ class CmsJobRunner extends Component
      */
     public function failHardTimeout(int $runId, int $ttr, ?string $executionToken = null)
     {
+        return $this->failStoppedExecution($runId, $executionToken, JobErrorClassifier::TIMEOUT,
+            "Задание превысило предельное время выполнения ({$ttr} с) и было прервано.", CmsJobRun::STATUS_TIMED_OUT);
+    }
+
+    /** Called only after the parent has observed its isolated child exit. */
+    public function failChildCrash(int $runId, int $exitCode, ?string $executionToken = null)
+    {
+        return $this->failStoppedExecution($runId, $executionToken, 'worker_crashed',
+            "Процесс задания аварийно завершился (код {$exitCode}). Подробности в журнале воркера.", CmsJobRun::STATUS_FAILED);
+    }
+
+    protected function failStoppedExecution(int $runId, ?string $executionToken, string $errorCode, string $message, string $status)
+    {
         $run = CmsJobRun::findOne(['id' => $runId]);
 
         if (!$run || $run->getIsFinished()) {
@@ -237,17 +250,20 @@ class CmsJobRunner extends Component
         $token = $executionToken;
 
         $definition = $this->registry->has($run->job_type) ? $this->registry->get($run->job_type) : null;
-        $message = "Задание превысило предельное время выполнения ({$ttr} с) и было прервано.";
+        $cancelled = $run->cancel_requested_at !== null;
+        if ($cancelled) {
+            $status = CmsJobRun::STATUS_CANCELLED;
+        }
 
         $event = $this->eventValues($run, CmsJobRunEvent::LEVEL_ERROR, $message);
 
         // Повторить можно только объявленное идемпотентным: процесс убит на
         // неизвестном шаге, и внешний вызов мог успеть пройти.
-        if ($definition && $definition->idempotent && $run->attempt < $run->max_attempts) {
+        if (!$cancelled && $definition && $definition->idempotent && $run->attempt < $run->max_attempts) {
             $delay = $this->retryPolicy->delayFor((int)$run->attempt);
 
             if ($this->store->requeue((int)$run->id, $token, $run->queue_name, $delay, false, [
-                'error_code' => JobErrorClassifier::TIMEOUT,
+                'error_code' => $errorCode,
                 'error_message' => $message,
             ], $event)) {
                 $this->lockManager->release($run->resource_key, $token);
@@ -259,8 +275,8 @@ class CmsJobRunner extends Component
 
         $now = time();
         $values = [
-            'status' => CmsJobRun::STATUS_TIMED_OUT,
-            'error_code' => JobErrorClassifier::TIMEOUT,
+            'status' => $status,
+            'error_code' => $errorCode,
             'error_message' => $message,
             'finished_at' => $now,
             'dedup_active' => null,
@@ -277,7 +293,7 @@ class CmsJobRunner extends Component
 
         $this->lockManager->release($run->resource_key, $token);
         $run->refresh();
-        $this->triggerFinished($run, CmsJobRun::STATUS_TIMED_OUT);
+        $this->triggerFinished($run, $status);
 
         return self::OUTCOME_EXECUTED;
     }

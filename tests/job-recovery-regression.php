@@ -30,6 +30,22 @@ $consume = function ($isolate = true, $maxJobs = 1) {
     ]));
 };
 try {
+    $oldMemoryLimit = ini_get('memory_limit');
+    ini_set('memory_limit', '256M');
+    $memoryRun = $push('memory-limit');
+    $consume();
+    ini_set('memory_limit', $oldMemoryLimit);
+    $memoryRun->refresh();
+    checkRecovery(($memoryRun->getResult()['memory_limit'] ?? null) === '256M', 'isolated child inherits effective PHP memory limit');
+
+    $cancelledRun = $push('ok', 'safe');
+    $cancelToken = Yii::$app->jobRunStore->claim((int)$cancelledRun->id, 'dead-child-fixture', 60);
+    CmsJobRun::updateAll(['cancel_requested_at' => time()], ['id' => $cancelledRun->id]);
+    Yii::$app->jobRunner->failChildCrash((int)$cancelledRun->id, 255, $cancelToken);
+    $cancelledRun->refresh();
+    checkRecovery($cancelledRun->status === 'cancelled' && $cancelledRun->dedup_active === null, 'dead cancelled child is finalized without retry');
+    $consume();
+    checkRecovery(count($messages()) === 0, 'cancelled child leaves no retry message');
     foreach (['crash', 'signal', 'sleep'] as $bootMode) {
         $run = $push();
         putenv('SKEEKS_JOB_TEST_BOOT_MODE='.$bootMode);
@@ -111,23 +127,24 @@ try {
     $crashedUnsafe = $push('crash');
     $consume(); $consume();
     $crashedSafe->refresh(); $crashedUnsafe->refresh();
-    checkRecovery($crashedSafe->status === 'running' && $crashedUnsafe->status === 'running' && count($messages()) === 0, 'claimed crashes await lease recovery');
+    checkRecovery($crashedSafe->status === 'queued' && $crashedUnsafe->status === 'failed' && count($messages()) === 1, 'parent immediately resolves claimed crashes');
+    checkRecovery($crashedUnsafe->error_code === 'worker_crashed', 'crash has explicit error code');
     // The production reaper scans all expired runs: never run it if a foreign
     // expired operation is present in this local development database.
     if (CmsJobRun::find()->where(['status' => 'running'])->andWhere(['<', 'lease_until', time()])
         ->andWhere(['or', ['correlation_id' => null], ['<>', 'correlation_id', $correlation]])->exists()) {
         throw new RuntimeException('Reaper test blocked by a foreign expired run.');
     }
-    CmsJobRun::updateAll(['lease_until' => time() - 2], ['id' => [$crashedSafe->id, $crashedUnsafe->id]]);
     $isIdempotent = function ($run) { return Yii::$app->jobRegistry->get($run->job_type)->idempotent; };
     $reaped = Yii::$app->jobRunStore->reapExpired($isIdempotent);
     $crashedSafe->refresh(); $crashedUnsafe->refresh();
-    checkRecovery($reaped === ['requeued' => 1, 'timed_out' => 1] && $crashedSafe->status === 'queued' && $crashedUnsafe->status === 'timed_out', 'reaper retries only declared idempotent crash');
+    checkRecovery($reaped === ['requeued' => 0, 'timed_out' => 0] && $crashedSafe->status === 'queued' && $crashedUnsafe->status === 'failed', 'reaper does not touch resolved crashes');
     $rows = $messages();
     checkRecovery(count($rows) === 1 && (int)$rows[0]['priority'] === 234 && (int)$rows[0]['ttr'] === 2, 'reaper preserves delivery metadata');
     Yii::$app->jobRunStore->reapExpired($isIdempotent);
     checkRecovery(count($messages()) === 1, 'second reaper adds no duplicate');
     CmsJobRun::updateAll(['payload_json' => json_encode(['mode' => 'ok'])], ['id' => $crashedSafe->id]);
+    sleep(2);
     $consume();
     $crashedSafe->refresh();
     checkRecovery($crashedSafe->status === 'succeeded' && (int)$crashedSafe->attempt === 2, 'reaped crash executes again through transport');
@@ -138,6 +155,9 @@ try {
     $run->refresh();
     checkRecovery($run->status === 'running' && $run->execution_token === $token, 'unsupported envelope cannot fail active owner');
     $eventsBefore = $run->getEvents()->count();
+    Yii::$app->jobRunner->failChildCrash((int)$run->id, 42, str_repeat('a', 32));
+    $run->refresh();
+    checkRecovery($run->status === 'running' && $run->getEvents()->count() === $eventsBefore, 'crash requires original attempt token');
     Yii::$app->jobRunner->failHardTimeout((int)$run->id, 2, str_repeat('a', 32));
     $run->refresh();
     checkRecovery($run->status === 'running' && $run->execution_token === $token, 'timeout requires original attempt token');
