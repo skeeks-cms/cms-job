@@ -356,6 +356,8 @@ if ($isActive) {
                 return;
             }
 
+            if (data.label) { \$root.find('[data-sx-job-status]').text(data.label); }
+
             \$root.find('[data-sx-job-percent]').text(
                 data.percent === null ? data.current : data.percent + '%'
             );

@@ -358,8 +358,16 @@ class CmsJobRun extends \yii\db\ActiveRecord
     public function getStatusText()
     {
         $statuses = self::getStatuses();
+        $status = $this->getDisplayStatus();
+        if ($status === \skeeks\cms\job\helpers\JobDisplayStatus::STALE) {
+            return Yii::t('skeeks/job', 'Статус уточняется');
+        }
+        return isset($statuses[$status]) ? $statuses[$status] : $status;
+    }
 
-        return isset($statuses[$this->status]) ? $statuses[$this->status] : (string)$this->status;
+    public function getDisplayStatus(): string
+    {
+        return \skeeks\cms\job\helpers\JobDisplayStatus::resolve((string)$this->status, $this->getResult());
     }
 
     /**

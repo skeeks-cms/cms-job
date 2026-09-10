@@ -57,6 +57,13 @@ const base = {status: 'queued', label: 'В очереди', finished: false, per
 
     ui = await render({...base, busy: true});
     assert.equal(ui.button.attributes['aria-busy'], 'true', 'remote operation stays busy while observer is queued');
+    let remoteUi = await render({...base, displayStatus: 'running', label: 'Выполняется'});
+    assert.equal(remoteUi.button.textContent, 'Выполняется');
+    assert.equal(remoteUi.button.attributes['aria-busy'], 'true');
+    remoteUi = await render({...base, displayStatus: 'awaiting_confirmation', label: 'Статус уточняется', busy: true});
+    assert.equal(remoteUi.button.textContent, 'Статус уточняется');
+    assert.equal(remoteUi.button.attributes['aria-busy'], undefined, 'stale remote observation does not claim active execution');
+    assert.equal(remoteUi.button.disabled, true, 'stale observation cannot trigger a duplicate job');
     for (const status of ['running', 'queued', 'queued']) {
         ui.setRun({...base, status, busy: true});
         ui.timers.filter(t => t.delay === 2500).at(-1).fn();

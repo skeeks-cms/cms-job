@@ -424,6 +424,7 @@ class AdminCmsJobRunController extends BackendModelStandartController
                 'max_attempts',
                 'cancel_requested_at',
                 'finished_at',
+                'result_json',
             ])
             ->andWhere(['id' => $ids])
             ->asArray()
@@ -432,8 +433,14 @@ class AdminCmsJobRunController extends BackendModelStandartController
         $data = [];
         foreach ($rows as $row) {
             $total = (int)$row['progress_total'];
+            $result = json_decode($row['result_json'] ?? '', true);
+            $displayStatus = \skeeks\cms\job\helpers\JobDisplayStatus::resolve($row['status'], is_array($result) ? $result : []);
+            $label = $displayStatus === \skeeks\cms\job\helpers\JobDisplayStatus::STALE
+                ? \Yii::t('skeeks/job', 'Статус уточняется') : (CmsJobRun::getStatuses()[$displayStatus] ?? $displayStatus);
             $data[$row['id']] = [
                 'status' => $row['status'],
+                'displayStatus' => $displayStatus,
+                'label' => $label,
                 'stage' => $row['stage'],
                 'message' => $row['progress_message'],
                 'current' => (int)$row['progress_current'],
