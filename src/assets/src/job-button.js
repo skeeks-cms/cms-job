@@ -36,7 +36,7 @@
                 if (!payload.success) throw new Error('Rejected');
                 const run = payload.run;
                 const active = run && !run.finished;
-                running = !!active && run.status === 'running';
+                running = !!active && (run.busy === true || run.status === 'running');
                 unknown = false;
                 button.textContent = active ? run.label : root.dataset.label;
                 button.disabled = !!active;
@@ -63,6 +63,7 @@
                     }
                 }
                 if (active) timer = setTimeout(() => request(false), document.hidden ? 10000 : 2500);
+                root.dispatchEvent(new CustomEvent('sx:job-status', {bubbles: true, detail: {run: run}}));
             } catch (error) {
                 unknown = true;
                 running = false;

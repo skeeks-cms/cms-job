@@ -15,6 +15,8 @@ class JobButton extends Widget
     public $startUrl;
     public $statusUrl;
     public $label = 'Запустить';
+    /** Semantic backend button variant; existing consumers stay secondary. */
+    public $primary = false;
 
     public function run()
     {
@@ -24,7 +26,7 @@ class JobButton extends Widget
         \skeeks\cms\job\assets\JobButtonAsset::register($this->view);
         return Html::tag('div',
             Html::button(Html::encode($this->label), [
-                'type' => 'button', 'class' => 'sx-button sx-button--secondary',
+                'type' => 'button', 'class' => $this->primary ? 'sx-button sx-button--primary' : 'sx-button sx-button--secondary',
                 'data-sx-job-start' => '', 'disabled' => true,
             ]).Html::tag('div', 'Проверка статуса…', [
                 'data-sx-job-status' => '', 'role' => 'status', 'aria-live' => 'polite',

@@ -15,12 +15,13 @@ async function render(run, failed = false) {
     const button = element(), status = element(), result = element();
     const actions = [], requests = [], timers = [];
     const root = {dataset: {label: 'Запустить', startUrl: '/start', statusUrl: '/status'},
-        isConnected: true, querySelector(selector) {
+        isConnected: true, dispatchEvent() {}, querySelector(selector) {
             return {'[data-sx-job-start]': button, '[data-sx-job-status]': status,
                 '[data-sx-job-result]': result}[selector];
         }};
     const context = {window: {}, location: {href: 'http://localhost:8080/agents', origin: 'http://localhost:8080'},
         document: {readyState: 'complete', documentElement: {}, querySelectorAll: () => [root]},
+        CustomEvent: class { constructor(name, options) { this.type = name; Object.assign(this, options); } },
         URL, URLSearchParams, AbortController, setTimeout(fn, delay) { timers.push({fn, delay}); return timers.length; }, clearTimeout() {},
         MutationObserver: class { observe() {} },
         yii: {getCsrfParam: () => '_csrf', getCsrfToken: () => 'fixture'},
@@ -53,6 +54,19 @@ const base = {status: 'queued', label: 'В очереди', finished: false, per
     assert.match(ui.actions[0].url, /_sxb/);
     ui.result.listeners.click({button: 0, ctrlKey: true});
     assert.equal(ui.actions.length, 1, 'modified click preserves ordinary href');
+
+    ui = await render({...base, busy: true});
+    assert.equal(ui.button.attributes['aria-busy'], 'true', 'remote operation stays busy while observer is queued');
+    for (const status of ['running', 'queued', 'queued']) {
+        ui.setRun({...base, status, busy: true});
+        ui.timers.filter(t => t.delay === 2500).at(-1).fn();
+        await new Promise(setImmediate);
+        assert.equal(ui.button.attributes['aria-busy'], 'true', 'remote spinner persists across ' + status);
+    }
+    ui.setRun({...base, busy: true, status: 'succeeded_with_warnings', finished: true});
+    ui.timers.filter(t => t.delay === 2500).at(-1).fn();
+    await new Promise(setImmediate);
+    assert.equal(ui.button.attributes['aria-busy'], undefined, 'terminal result clears even stale busy flag');
 
     ui = await render({...base, status: 'running', label: 'Выполняется', percent: 35, message: 'Запись файла'});
     assert.equal(ui.button.attributes['aria-busy'], 'true', 'running spinner persists between polls');
