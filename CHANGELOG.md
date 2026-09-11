@@ -1,4 +1,12 @@
 # Changelog
+## 1.0.6 — 2026-09-11
+
+- Display «Ожидает продолжения» for local chunked jobs explicitly reporting
+  `_job_execution.state = awaiting_continuation` while queued between deliveries.
+- Keep initial queueing, real execution and terminal statuses distinct.
+- Preserve stored statuses, claiming, retries, cancellation and remote execution observations.
+- No migrations. Consumers opt in through result metadata before requeueing.
+- Verified 23 display-status checks and supplier-import integration fixtures.
 
 ## 1.0.1 — 2026-09-08
 

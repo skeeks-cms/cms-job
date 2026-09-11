@@ -5,6 +5,7 @@ namespace skeeks\cms\job\helpers;
 final class JobDisplayStatus
 {
     public const METADATA_KEY = '_job_execution';
+    public const CONTINUATION = 'awaiting_continuation';
     public const STALE = 'awaiting_confirmation';
     public const MAX_AGE = 120;
 
@@ -12,6 +13,9 @@ final class JobDisplayStatus
     {
         if ($status !== 'queued') { return $status; }
         $execution = $result[self::METADATA_KEY] ?? null;
+        if (is_array($execution) && ($execution['state'] ?? null) === self::CONTINUATION) {
+            return self::CONTINUATION;
+        }
         if (!is_array($execution) || ($execution['state'] ?? null) !== 'running') { return $status; }
         $observed = $execution['observed_at'] ?? null;
         $now = $now ?? time();

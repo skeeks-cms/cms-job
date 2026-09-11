@@ -19,4 +19,9 @@ foreach ([null,'990',1001] as $invalid) {
 }
 checkDisplay('queued','queued',[JobDisplayStatus::METADATA_KEY=>['state'=>'pending','observed_at'=>990]]);
 checkDisplay('queued','queued',[JobDisplayStatus::METADATA_KEY=>'running']);
+$continuation = [JobDisplayStatus::METADATA_KEY => ['state'=>JobDisplayStatus::CONTINUATION]];
+checkDisplay(JobDisplayStatus::CONTINUATION, 'queued', $continuation);
+checkDisplay(JobDisplayStatus::CONTINUATION, 'queued', $continuation, 999999);
+checkDisplay('running', 'running', $continuation);
+foreach (['succeeded','failed','cancelled','timed_out'] as $terminal) { checkDisplay($terminal,$terminal,$continuation); }
 echo "OK: $checks display-status checks\n";

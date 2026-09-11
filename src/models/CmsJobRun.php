@@ -359,6 +359,9 @@ class CmsJobRun extends \yii\db\ActiveRecord
     {
         $statuses = self::getStatuses();
         $status = $this->getDisplayStatus();
+        if ($status === \skeeks\cms\job\helpers\JobDisplayStatus::CONTINUATION) {
+            return Yii::t('skeeks/job', 'Ожидает продолжения');
+        }
         if ($status === \skeeks\cms\job\helpers\JobDisplayStatus::STALE) {
             return Yii::t('skeeks/job', 'Статус уточняется');
         }
