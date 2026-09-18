@@ -618,7 +618,9 @@ class AdminCmsJobRunController extends BackendModelStandartController
         $result = Html::tag('span', Html::encode($primary), ['class' => 'sx-collection-cell__primary']);
 
         $secondary = [];
-        if ($model->stage) {
+        if ($model->progress_message) {
+            $secondary[] = $model->progress_message;
+        } elseif ($model->stage) {
             $secondary[] = $model->stage;
         }
         if ($model->progress_total) {
