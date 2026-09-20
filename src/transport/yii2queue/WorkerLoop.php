@@ -35,6 +35,9 @@ class WorkerLoop extends SignalLoop
      */
     public $processed = 0;
 
+    /** @var callable|null Bounded maintenance before reserving the next message. */
+    public $maintenance;
+
     /**
      * @var int
      */
@@ -70,6 +73,8 @@ class WorkerLoop extends SignalLoop
 
             return false;
         }
+
+        if ($this->maintenance !== null) { ($this->maintenance)(); }
 
         $options = $this->options;
 

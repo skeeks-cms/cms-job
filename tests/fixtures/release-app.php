@@ -45,6 +45,10 @@ $config = yii\helpers\ArrayHelper::merge(
             ],
             'jobConsumer' => ['class' => ReleaseFixtureConsumer::class],
             'jobRegistry' => ['types' => [
+                'release.recovery' => [
+                    'type'=>'release.recovery','handler'=>ReleaseFixtureHandler::class,
+                    'queue'=>'maintenance','timeout'=>5,'leaseSeconds'=>5,'idempotent'=>true,'maxAttempts'=>3,
+                ],
                 'release.fixture' => [
                     'type' => 'release.fixture', 'handler' => ReleaseFixtureHandler::class,
                     'queue' => 'maintenance', 'timeout' => 5, 'leaseSeconds' => 5,

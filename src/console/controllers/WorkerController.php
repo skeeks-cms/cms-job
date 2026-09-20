@@ -352,22 +352,13 @@ class WorkerController extends Controller
      */
     public function actionReap()
     {
-        /** @var JobRunStore $store */
-        $store = \Yii::$app->get('jobRunStore');
-        /** @var LockManager $locks */
-        $locks = \Yii::$app->get('jobLockManager');
-        $registry = \Yii::$app->jobs->getRegistry();
-
-        $result = $store->reapExpired(function (CmsJobRun $run) use ($registry) {
-            return $registry->has($run->job_type) && $registry->get($run->job_type)->idempotent;
-        });
-
-        $released = $locks->reapExpired();
+        $result = (new \skeeks\cms\job\runtime\JobRecovery())->run();
+        $released = $result['released'];
 
         $this->stdout(
             "Возвращено в очередь: {$result['requeued']}, "
             ."помечено timed_out: {$result['timed_out']}, "
-            ."блокировок снято: {$released}\n"
+            ."отменено: {$result['cancelled']}, блокировок снято: {$released}\n"
         );
 
         // Публиковать здесь нечего: `reapExpired()` уже создал по одному

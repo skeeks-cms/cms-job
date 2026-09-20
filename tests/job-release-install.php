@@ -113,6 +113,7 @@ try {
     $app->jobs->cancel($delayed);
     $db->createCommand()->delete('{{%cms_queue}}', ['channel' => 'maintenance'])->execute();
     require __DIR__.'/job-log-storage-smoke.php';
+    require __DIR__.'/job-automatic-recovery.php';
     echo "OK {$checks} release checks\n";
     if (in_array('--regression', $argv, true)) {
         if ($db->tablePrefix !== '') {

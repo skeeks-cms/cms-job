@@ -55,6 +55,9 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
      */
     public $crashRedeliveryDelay = 30;
 
+    /** Seconds between bounded recovery passes in each worker. */
+    public $recoveryInterval = 60;
+
     public function init()
     {
         parent::init();
@@ -75,7 +78,10 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
             );
         }
 
-        $loop = new WorkerLoop($queue, ['options' => $options]);
+        $recovery = new \skeeks\cms\job\runtime\JobRecovery();
+        $loop = new WorkerLoop($queue, ['options' => $options, 'maintenance' => function () use ($recovery) {
+            $recovery->tick(max(1, (int)$this->recoveryInterval));
+        }]);
         $previousLoop = $queue->loopConfig;
 
         // Подменяем цикл библиотеки своим: сигналы обрабатывает он же

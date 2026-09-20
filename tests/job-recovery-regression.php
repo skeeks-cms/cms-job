@@ -138,7 +138,7 @@ try {
     $isIdempotent = function ($run) { return Yii::$app->jobRegistry->get($run->job_type)->idempotent; };
     $reaped = Yii::$app->jobRunStore->reapExpired($isIdempotent);
     $crashedSafe->refresh(); $crashedUnsafe->refresh();
-    checkRecovery($reaped === ['requeued' => 0, 'timed_out' => 0] && $crashedSafe->status === 'queued' && $crashedUnsafe->status === 'failed', 'reaper does not touch resolved crashes');
+    checkRecovery($reaped === ['requeued' => 0, 'timed_out' => 0, 'cancelled' => 0] && $crashedSafe->status === 'queued' && $crashedUnsafe->status === 'failed', 'reaper does not touch resolved crashes');
     $rows = $messages();
     checkRecovery(count($rows) === 1 && (int)$rows[0]['priority'] === 234 && (int)$rows[0]['ttr'] === 2, 'reaper preserves delivery metadata');
     Yii::$app->jobRunStore->reapExpired($isIdempotent);

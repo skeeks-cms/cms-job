@@ -238,7 +238,7 @@ class JobRunStore extends Component
     public function reapExpired(callable $isIdempotent, int $limit = 100): array
     {
         $now = time();
-        $result = ['requeued' => 0, 'timed_out' => 0];
+        $result = ['requeued' => 0, 'timed_out' => 0, 'cancelled' => 0];
 
         $expired = CmsJobRun::find()
             ->andWhere(['status' => CmsJobRun::STATUS_RUNNING])
@@ -251,7 +251,8 @@ class JobRunStore extends Component
 
             // Повторять можно только объявленное идемпотентным: воркер мог
             // упасть уже после внешнего вызова, и результат неизвестен.
-            $canRetry = $token !== ''
+            $canRetry = !$run->cancel_requested_at
+                && $token !== ''
                 && call_user_func($isIdempotent, $run)
                 && $run->attempt < $run->max_attempts;
 
@@ -265,27 +266,27 @@ class JobRunStore extends Component
 
             $affected = CmsJobRun::updateAll(
                 [
-                    'status' => CmsJobRun::STATUS_TIMED_OUT,
+                    'status' => $run->cancel_requested_at ? CmsJobRun::STATUS_CANCELLED : CmsJobRun::STATUS_TIMED_OUT,
                     'execution_token' => null,
                     'worker_id' => null,
                     'worker_pid' => null,
                     'lease_until' => null,
                     'dedup_active' => null,
-                    'error_code' => 'lease_expired',
-                    'error_message' => 'Аренда воркера истекла, задание не завершилось.',
+                    'error_code' => $run->cancel_requested_at ? 'cancelled' : 'lease_expired',
+                    'error_message' => $run->cancel_requested_at ? 'Отмена завершена после потери исполнителя.' : 'Аренда воркера истекла, задание не завершилось.',
                     'finished_at' => $now,
                     'updated_at' => $now,
                 ],
                 [
                     'and',
                     ['id' => $run->id, 'status' => CmsJobRun::STATUS_RUNNING],
-                    ['execution_token' => $run->execution_token],
+                    ['execution_token' => $run->execution_token, 'cancel_requested_at' => $run->cancel_requested_at],
                     ['<', 'lease_until', $now],
                 ]
             );
 
             if ($affected === 1) {
-                $result['timed_out']++;
+                $result[$run->cancel_requested_at ? 'cancelled' : 'timed_out']++;
             }
         }
 
@@ -314,7 +315,7 @@ class JobRunStore extends Component
                 [
                     'and',
                     ['id' => $run->id, 'status' => CmsJobRun::STATUS_RUNNING],
-                    ['execution_token' => $token],
+                    ['execution_token' => $token, 'cancel_requested_at' => null],
                     ['<', 'lease_until', $now],
                 ]
             );
