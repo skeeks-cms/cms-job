@@ -14,6 +14,7 @@ class QueueListingController extends \skeeks\cms\job\console\controllers\WorkerC
 $app = new yii\console\Application([
     'id' => 'queue-list-test', 'basePath' => __DIR__,
     'components' => [
+        'jobWorker' => ['class' => \skeeks\cms\job\transport\WorkerSettings::class],
         'jobQueueFactory' => [
             'class' => \skeeks\cms\job\transport\yii2queue\QueueFactory::class,
             'queues' => ['maintenance' => [], 'default' => []],
@@ -38,11 +39,19 @@ function queueCheck($condition, $message) {
 queueCheck($controller->runAction('queues', ['json' => '1']) === 0, 'public action accepts --json');
 $data = json_decode($controller->output, true, 512, JSON_THROW_ON_ERROR);
 queueCheck($data['schema_version'] === 1 && count($data['queues']) === 2, 'versioned JSON lists all configured lanes');
+queueCheck($data['worker']['dispatcher_supported'] === false, 'unsupported custom transport is not advertised as dispatcher-capable');
 queueCheck($data['queues'][0]['name'] === 'default' && $data['queues'][0]['types'] === [] && $data['queues'][0]['max_ttr'] === null, 'empty lane retained');
 queueCheck(array_column($data['queues'][1]['types'], 'type') === ['test.first', 'test.second'] && $data['queues'][1]['max_ttr'] === 23, 'types sorted and TTR derived from definitions');
 queueCheck(strpos($controller->output, 'fixture-secret') === false, 'transport config not exposed');
 $controller->json = false; $controller->output = '';
 queueCheck($controller->actionQueues() === 0 && strpos($controller->output, 'maintenance') !== false, 'human-readable output');
+$app->jobQueueFactory->queues['reports'] = [];
+$app->jobRegistry->add(['type' => 'test.report', 'handler' => 'UnusedHandler', 'queue' => 'reports']);
+$controller->json = true; $controller->output = '';
+queueCheck($controller->actionQueues() === 0, 'new registered channel and type pass discovery');
+$updated = json_decode($controller->output, true, 512, JSON_THROW_ON_ERROR);
+$reports = array_values(array_filter($updated['queues'], static function ($lane) { return $lane['name'] === 'reports'; }));
+queueCheck(count($reports) === 1 && $reports[0]['types'][0]['type'] === 'test.report', 'new channel reaches machine-readable hosting discovery');
 $app->jobRegistry->add(['type' => 'test.missing', 'handler' => 'UnusedHandler', 'queue' => 'missing']);
 $controller->json = true; $controller->output = '';
 queueCheck($controller->actionQueues() === yii\console\ExitCode::CONFIG, 'missing lane returns config error');

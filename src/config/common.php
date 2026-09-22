@@ -8,6 +8,12 @@
  */
 return [
     'components' => [
+        'jobWorker' => [
+            'class' => \skeeks\cms\job\transport\WorkerSettings::class,
+        ],
+        'jobDispatcher' => [
+            'class' => \skeeks\cms\job\transport\yii2queue\Yii2QueueDispatcher::class,
+        ],
         'jobLogs' => [
             'class' => \skeeks\cms\job\runtime\JobLogStorage::class,
             // SkeekS web/console have separate @runtime aliases. Both need one root.

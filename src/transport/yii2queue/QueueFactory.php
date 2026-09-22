@@ -55,6 +55,16 @@ class QueueFactory extends Component
         return array_keys($this->queues);
     }
 
+    /** Discovery must not construct queues or open database connections. */
+    public function supportsDispatcher(): bool
+    {
+        foreach ($this->queues as $config) {
+            $class = $config['class'] ?? ($this->defaults['class'] ?? null);
+            if (!is_string($class) || !is_a($class, DbQueue::class, true)) { return false; }
+        }
+        return true;
+    }
+
     /**
      * @return \yii\queue\db\Queue|\yii\queue\cli\Queue
      * @throws InvalidConfigException

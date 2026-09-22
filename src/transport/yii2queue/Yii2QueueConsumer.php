@@ -12,8 +12,6 @@ use skeeks\cms\job\contracts\JobConsumerInterface;
 use skeeks\cms\job\models\CmsJobRun;
 use skeeks\cms\job\runtime\CmsJobRunner;
 use skeeks\cms\job\transport\WorkerOptions;
-use Symfony\Component\Process\Exception\ProcessTimedOutException;
-use Symfony\Component\Process\Exception\ProcessSignaledException;
 use Symfony\Component\Process\Process;
 use yii\base\Component;
 use yii\di\Instance;
@@ -24,7 +22,7 @@ use yii\queue\Queue as BaseQueue;
 /**
  * Потребление сообщений через yii2-queue.
  *
- * Это единственное место во всём пакете, где вызывается `cli\Queue::run()`.
+ * Здесь вызывается `cli\Queue::run()` для прежнего режима одной полосы.
  * Метод относится к внутреннему устройству библиотеки: он сам держит цикл
  * опроса, резервирует сообщение, зовёт обработчик и подтверждает доставку.
  * Ни команда `cms-job/worker`, ни доменный слой не должны его видеть — иначе
@@ -146,67 +144,44 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
      */
     protected function enableIsolation(CliQueue $queue, WorkerOptions $options)
     {
-        $script = $this->resolveScriptPath();
-
-        $queue->messageHandler = function ($id, $message, $ttr, $attempt) use ($queue, $script, $options) {
-            $executionToken = bin2hex(random_bytes(16));
-            $command = [
-                PHP_BINARY,
-                '-d',
-                'memory_limit='.ini_get('memory_limit'),
-                $script,
-                'cms-job/worker/exec',
-                (string)$id,
-                (string)$ttr,
-                (string)$attempt,
-                (string)($queue->getWorkerPid() ?: 0),
-                $executionToken,
-                '--queue='.$options->queue,
-            ];
-
-            $process = new Process($command, dirname($script), null, $message, $ttr);
-
-            $output = function ($type, $buffer) use ($options) {
-                if (!$options->verbose) {
-                    return;
-                }
-
-                if ($type === Process::ERR) {
-                    fwrite(STDERR, $buffer);
-                } else {
-                    fwrite(STDOUT, $buffer);
-                }
-            };
-
-            // Reservation is committed and its mutex released. The child opens
-            // its own connection; the parent reconnects lazily for ack/recovery.
-            if ($queue instanceof DbQueue) {
-                $queue->releaseWorkerConnection();
-            }
-
-            // Token identifies this attempt across hosts/PID namespaces.
-            $process->start($output);
-            $childPid = $process->getPid();
-
-            try {
-                $exitCode = $process->wait($output);
-            } catch (ProcessTimedOutException $e) {
-                return $this->handleHardTimeout($queue, $message, (int)$ttr, $executionToken, $id, $attempt);
-            } catch (ProcessSignaledException $e) {
-                return $this->handleChildCrash($queue, $message, 128 + $process->getTermSignal(), $childPid,
-                    $process->getErrorOutput(), $id, $attempt, $executionToken);
-            }
-
-            // Прочие коды возврата означают, что дочерний процесс умер, не
-            // дойдя до штатного завершения: сегфолт, OOM-killer, fatal error.
-            if (!in_array($exitCode, [self::EXEC_DONE, self::EXEC_RETRY], true)) {
-                return $this->handleChildCrash($queue, $message, $exitCode, $childPid, $process->getErrorOutput(), $id, $attempt, $executionToken);
-            }
-
-            return $exitCode === self::EXEC_DONE;
+        $queue->messageHandler = function ($id, $message, $ttr, $attempt) use ($queue, $options) {
+            $delivery = $this->startDelivery($queue, $options, $id, $message, $ttr, $attempt);
+            while (($result = $delivery->poll()) === null) { usleep(10000); }
+            return $result;
         };
     }
 
+    /** Shared child lifecycle for both the single-channel worker and dispatcher. */
+    public function startDelivery(CliQueue $queue, WorkerOptions $options, $id, $message, $ttr, $attempt): IsolatedDelivery
+    {
+        $script = $this->resolveScriptPath();
+        $token = bin2hex(random_bytes(16));
+        $process = new Process([
+            PHP_BINARY, '-d', 'memory_limit='.ini_get('memory_limit'), $script,
+            'cms-job/worker/exec', (string)$id, (string)$ttr, (string)$attempt,
+            (string)($queue->getWorkerPid() ?: getmypid()), $token, '--queue='.$options->queue,
+        ], dirname($script), null, $message, $ttr);
+        $output = static function ($type, $buffer) use ($options) {
+            if ($options->verbose) { fwrite($type === Process::ERR ? STDERR : STDOUT, $buffer); }
+        };
+        if ($queue instanceof DbQueue) { $queue->releaseWorkerConnection(); }
+        try {
+            $process->start($output);
+        } catch (\Throwable $e) {
+            // No child acquired the run. Do not leave it reserved for its whole TTR.
+            if ($queue instanceof \yii\queue\db\Queue) { $this->deferRedelivery($queue, $id, $attempt); }
+            throw $e;
+        }
+        $pid = $process->getPid();
+        return new IsolatedDelivery($process,
+            function () use ($queue, $message, $ttr, $token, $id, $attempt) {
+                return $this->handleHardTimeout($queue, $message, (int)$ttr, $token, $id, $attempt);
+            },
+            function ($code, $stderr) use ($queue, $message, $pid, $id, $attempt, $token) {
+                return $this->handleChildCrash($queue, $message, $code, $pid, $stderr, $id, $attempt, $token);
+            }
+        );
+    }
     /**
      * Дочерний процесс не уложился в TTR и был убит.
      */

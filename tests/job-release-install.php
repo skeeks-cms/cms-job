@@ -86,7 +86,10 @@ try {
         releaseCheck($worker->getExitCode() === 0 && $laneRun->status === 'succeeded', 'isolated lane worker: '.$lane);
     }
     releaseCheck(!(new Query())->from('{{%cms_queue}}')->exists(), 'all lanes acknowledged');
-    foreach ([[], ['--queue=missing'], ['--queues=imports,exports']] as $arguments) {
+    $worker = new Process([PHP_BINARY, __DIR__.'/fixtures/release-worker.php', 'cms-job/worker', '--once=1'], null, null, null, 10);
+    $worker->run();
+    releaseCheck($worker->getExitCode() === 0, 'default dispatcher drains configured lanes and exits with --once');
+    foreach ([['--queue=missing'], ['--queues=imports,exports']] as $arguments) {
         $worker = new Process(array_merge([PHP_BINARY, __DIR__.'/fixtures/release-worker.php', 'cms-job/worker'], $arguments), null, null, null, 10);
         $worker->run();
         releaseCheck($worker->getExitCode() === yii\console\ExitCode::USAGE, 'invalid lane returns documented usage code');

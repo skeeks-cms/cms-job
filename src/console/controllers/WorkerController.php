@@ -37,8 +37,7 @@ class WorkerController extends Controller
     public $queue = '';
 
     /**
-     * @var string Устаревший синоним --queue, оставлен для совместимости.
-     *             Список через запятую не поддерживается.
+     * @var string Список каналов для dispatch; в index — прежний синоним --queue.
      */
     public $queues = '';
 
@@ -114,6 +113,8 @@ class WorkerController extends Controller
         if ($this->json) {
             $this->stdout(\yii\helpers\Json::encode([
                 'schema_version' => 1,
+                'worker' => ['dispatcher_supported' => $factory->supportsDispatcher()]
+                    + \Yii::$app->get('jobWorker')->describe(),
                 'queues' => array_values($lanes),
                 'unconfigured_types' => $missing,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)."\n");
@@ -203,6 +204,9 @@ class WorkerController extends Controller
      */
     public function actionIndex()
     {
+        if ($this->queue === '' && $this->queues === '' && \Yii::$app->get('jobWorker')->mode === 'dispatcher') {
+            return $this->actionDispatch();
+        }
         try {
             $queue = $this->resolveQueue();
         } catch (\Throwable $e) {
@@ -242,6 +246,29 @@ class WorkerController extends Controller
         \Yii::info("Воркер {$workerId} остановлен, полоса: {$queue}", 'skeeks/job');
 
         return $exitCode;
+    }
+
+    /** One dispatcher; --queues is an explicit comma-separated channel selection. */
+    public function actionDispatch()
+    {
+        try {
+            $factory = \Yii::$app->get('jobQueueFactory');
+            $selection = trim($this->queues !== '' ? $this->queues : $this->queue);
+            $names = $selection === '' ? $factory->names() : array_values(array_unique(array_map('trim', explode(',', $selection))));
+            foreach ($names as $name) {
+                if (!$factory->has($name)) { throw new InvalidConfigException('Unknown channel: '.$name); }
+            }
+            $this->stdout('Диспетчер запущен, каналы: '.implode(', ', $names)."\n");
+            return \Yii::$app->get('jobDispatcher')->consume($names, new WorkerOptions([
+                'once' => (bool)$this->once, 'timeout' => max(1, (int)$this->idleDelay),
+                'maxJobs' => (int)$this->maxJobs, 'maxRuntime' => (int)$this->maxSeconds,
+                'memoryLimit' => (int)$this->memoryLimit, 'isolate' => (bool)$this->isolate,
+                'verbose' => true, 'workerId' => $this->workerId(),
+            ]), \Yii::$app->get('jobWorker'));
+        } catch (InvalidConfigException $e) {
+            $this->stderr($e->getMessage()."\n", Console::FG_RED);
+            return ExitCode::CONFIG;
+        }
     }
 
     /**
@@ -298,8 +325,8 @@ class WorkerController extends Controller
             array_filter(array_map('trim', explode(',', $list)), 'strlen')
         );
 
-        return "Один процесс слушает одну полосу: так тяжёлый импорт не задерживает"
-            ." уведомления, и полосы масштабируются независимо.\n"
+        return "Для нескольких полос используйте cms-job/worker/dispatch --queues=".$list."\n"
+            ."Прежний режим --queue обслуживает одну полосу.\n"
             ."Запустите отдельный воркер на каждую:\n  ".implode("\n  ", $commands);
     }
 

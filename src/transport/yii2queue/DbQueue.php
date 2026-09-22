@@ -4,6 +4,17 @@ namespace skeeks\cms\job\transport\yii2queue;
 /** DB transport which does not occupy a MySQL session while the worker waits. */
 class DbQueue extends \yii\queue\db\Queue
 {
+    /** Adapter-only access to the library's reservation and acknowledgement. */
+    public function reserveDelivery()
+    {
+        return $this->reserve();
+    }
+
+    public function acknowledgeDelivery(array $payload): void
+    {
+        $this->release($payload);
+    }
+
     /** Disable for custom workers that intentionally retain session state/locks. */
     public $releaseIdleConnection = true;
 
