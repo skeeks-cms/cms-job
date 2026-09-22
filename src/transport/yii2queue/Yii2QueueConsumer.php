@@ -178,6 +178,12 @@ class Yii2QueueConsumer extends Component implements JobConsumerInterface
                 }
             };
 
+            // Reservation is committed and its mutex released. The child opens
+            // its own connection; the parent reconnects lazily for ack/recovery.
+            if ($queue instanceof DbQueue) {
+                $queue->releaseWorkerConnection();
+            }
+
             // Token identifies this attempt across hosts/PID namespaces.
             $process->start($output);
             $childPid = $process->getPid();

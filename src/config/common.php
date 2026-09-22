@@ -44,7 +44,7 @@ return [
         'jobQueueFactory' => [
             'class' => \skeeks\cms\job\transport\yii2queue\QueueFactory::class,
             'defaults' => [
-                'class' => \yii\queue\db\Queue::class,
+                'class' => \skeeks\cms\job\transport\yii2queue\DbQueue::class,
                 // То же соединение, что у приложения: на этом держится общая
                 // транзакция постановки.
                 'db' => 'db',
