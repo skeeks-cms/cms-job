@@ -37,5 +37,11 @@
                 "src/config/web.php"
             ]
         }
+    },
+    "conflict": {
+        "skeeks/cms-agent": "<3.2.5"
+    },
+    "suggest": {
+        "skeeks/cms-agent": "^3.2.5 for automatic maintenance schedules via cmsAgent/init"
     }
 }

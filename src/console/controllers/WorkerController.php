@@ -402,19 +402,7 @@ class WorkerController extends Controller
      */
     public function actionCleanup()
     {
-        $condition = [
-            'and',
-            ['status' => CmsJobRun::finishedStatuses()],
-            ['not', ['retention_until' => null]],
-            ['<', 'retention_until', time()],
-        ];
-        $deleted = 0;
-        foreach (CmsJobRun::find()->where($condition)->orderBy(['id' => SORT_ASC])->limit(500)->all() as $run) {
-            foreach ($run->artifacts as $artifact) {
-                if ($artifact->log_path) { \Yii::$app->jobLogs->remove($artifact->log_path); }
-            }
-            $deleted += CmsJobRun::deleteAll(['and', $condition, ['id' => $run->id]]);
-        }
+        $deleted = (new \skeeks\cms\job\runtime\JobHistoryCleanup())->cleanup();
 
         $this->stdout("Удалено прогонов: {$deleted}\n");
 

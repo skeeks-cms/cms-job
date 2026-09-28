@@ -170,7 +170,7 @@ class JobLogStorage extends Component
     }
 
     /** Bounded pass; keep artifact metadata so the UI can explain expiry. */
-    public function cleanup(int $limit = 500): int
+    public function cleanup(int $limit = 500, ?callable $checkpoint = null): int
     {
         $artifacts = CmsJobRunArtifact::find()->alias('a')->innerJoin(
             ['r' => CmsJobRun::tableName()], 'r.id = a.cms_job_run_id'
@@ -180,6 +180,7 @@ class JobLogStorage extends Component
             ->orderBy(['a.expires_at' => SORT_ASC, 'a.id' => SORT_ASC])->limit($limit)->all();
         $count = 0;
         foreach ($artifacts as $artifact) {
+            if ($checkpoint) { $checkpoint(); }
             $this->remove($artifact->log_path);
             CmsJobRunArtifact::updateAll(['log_path' => null], ['id' => $artifact->id, 'log_path' => $artifact->log_path]);
             $count++;
@@ -188,13 +189,14 @@ class JobLogStorage extends Component
     }
 
     /** Old files whose runs/artifacts were deleted or never registered after a crash. */
-    public function cleanupOrphans(int $limit = 500): int
+    public function cleanupOrphans(int $limit = 500, ?callable $checkpoint = null): int
     {
         $root = $this->root();
         $cutoff = time() - max(1, (int)$this->retentionDays) * 86400;
         $keys = [];
         $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
         foreach ($iterator as $file) {
+            if ($checkpoint) { $checkpoint(); }
             if ($file->isLink() || !$file->isFile() || $file->getMTime() > $cutoff) { continue; }
             $key = substr(str_replace('\\', '/', $file->getPathname()), strlen($root) + 1);
             if (!preg_match('~^[a-zA-Z0-9_-]{1,32}/[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]+/([0-9]+)-[a-f0-9]{32}\.(?:log|csv)$~D', $key, $matches)) { continue; }
@@ -205,7 +207,10 @@ class JobLogStorage extends Component
             if (count($keys) >= max(1, $limit)) { break; }
         }
         unset($iterator);
-        foreach ($keys as $key) { $this->remove($key); }
+        foreach ($keys as $key) {
+            if ($checkpoint) { $checkpoint(); }
+            $this->remove($key);
+        }
         return count($keys);
     }
 }

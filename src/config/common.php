@@ -2,11 +2,11 @@
 /**
  * Общая конфигурация подсистемы фоновых заданий.
  *
- * Реестр типов пуст: типы регистрируют пакеты-потребители и проект, дописывая
+ * Предметные типы регистрируют пакеты-потребители и проект, дописывая
  * `components.jobRegistry.types`. Запускать можно только зарегистрированный
  * тип, поэтому произвольная строка обработчиком не станет.
  */
-return [
+$config = [
     'components' => [
         'jobWorker' => [
             'class' => \skeeks\cms\job\transport\WorkerSettings::class,
@@ -130,3 +130,38 @@ return [
         ],
     ],
 ];
+
+foreach ([
+    'cms-job.cleanup' => ['history', 'Очистка истории заданий', 86400],
+    'cms-job.cleanup-logs' => ['logs', 'Очистка логов и отчётов заданий', 3600],
+] as $type => [$operation, $title, $interval]) {
+    $config['components']['jobRegistry']['types'][$type] = [
+        'type' => $type,
+        'title' => $title,
+        'handler' => [
+            'class' => \skeeks\cms\job\handlers\CleanupJobHandler::class,
+            'operation' => $operation,
+        ],
+        'queue' => 'maintenance',
+        'timeout' => 600,
+        'leaseSeconds' => 120,
+        'maxAttempts' => 1,
+        'idempotent' => true,
+        'overlapPolicy' => 'skip',
+        'permission' => \skeeks\cms\rbac\CmsManager::PERMISSION_ROLE_ADMIN_ACCESS,
+        // Both operations touch the same installation-wide history/log storage.
+        'resourceKey' => static function () { return 'cms-job:cleanup'; },
+        'dedupKey' => static function () use ($type) { return $type; },
+    ];
+    // The scheduler is optional. Registration never provisions a worker or
+    // mutates schedules while reading configuration; cmsAgent/init applies it.
+    if (class_exists(\skeeks\cms\agent\CmsAgentComponent::class)) {
+        $config['components']['cmsAgent']['jobs'][$type] = [
+            'jobType' => $type,
+            'name' => $title,
+            'interval' => $interval,
+        ];
+    }
+}
+
+return $config;
