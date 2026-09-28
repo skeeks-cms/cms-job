@@ -31,7 +31,8 @@ class CleanupJobHandler extends AbstractJobHandler
         $reporter->setStage($this->operation, $this->operation === 'history'
             ? 'Удаление просроченной истории заданий' : 'Удаление просроченных логов и отчётов');
         if ($this->operation === 'history') {
-            $batch = ['deleted_runs' => (new JobHistoryCleanup())->cleanup($limit, $checkpoint)];
+            $history = new JobHistoryCleanup();
+            $batch = ['deleted_runs' => $history->cleanup($limit, $checkpoint, (int)($context->getCursor()['history_after'] ?? 0))];
         } else {
             $batch = [
                 'expired_logs' => \Yii::$app->jobLogs->cleanup($limit, $checkpoint),
@@ -39,15 +40,18 @@ class CleanupJobHandler extends AbstractJobHandler
             ];
         }
         $totals = $context->getCursor();
+        if (isset($history)) { $totals['history_after'] = $history->lastScannedId; }
         foreach ($batch as $key => $count) { $totals[$key] = (int)($totals[$key] ?? 0) + $count; }
         $context->setCursor($totals);
         $reporter->advance(array_sum($batch));
         $reporter->countSuccess(array_sum($batch));
-        $more = max($batch) >= $limit;
+        $more = isset($history) ? $history->scannedCount >= $limit : max($batch) >= $limit;
         $result = $totals;
         $result['_job_execution'] = ['state' => $more ? 'awaiting_continuation' : 'complete'];
         $reporter->setResult($result);
         if ($more) { $context->requestRequeue(1); }
-        $reporter->setStage('complete', 'Очистка завершена. Удалено: '.array_sum($totals).'.');
+        $counts = $totals;
+        unset($counts['history_after']);
+        $reporter->setStage('complete', 'Очистка завершена. Удалено: '.array_sum($counts).'.');
     }
 }

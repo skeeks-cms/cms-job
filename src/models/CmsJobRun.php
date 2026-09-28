@@ -139,6 +139,14 @@ class CmsJobRun extends \yii\db\ActiveRecord
         return '{{%cms_job_run}}';
     }
 
+    public function beforeDelete()
+    {
+        if (\Yii::$app->has('jobWorkspaces') && \Yii::$app->jobWorkspaces->protectsHistory((int)$this->id)) {
+            throw new \yii\base\InvalidCallException('Сначала необходимо очистить рабочую папку задания.');
+        }
+        return parent::beforeDelete();
+    }
+
     /**
      * @return CmsJobRunQuery
      */

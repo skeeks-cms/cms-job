@@ -93,18 +93,18 @@ function artifact(CmsJobRun $run, string $extension = 'log', ?int $expiry = null
 }
 
 try {
-    $types = ['cms-job.cleanup' => 86400, 'cms-job.cleanup-logs' => 3600];
+    $types = ['cms-job.cleanup' => 86400, 'cms-job.cleanup-logs' => 3600, 'cms-job.cleanup-workspaces' => 3600];
     foreach ($types as $type => $interval) {
         $def = $app->jobRegistry->get($type);
         check($def->queue === 'maintenance' && $def->idempotent && $def->overlapPolicy === 'skip', 'Native maintenance contract');
         check($def->permission === skeeks\cms\rbac\CmsManager::PERMISSION_ROLE_ADMIN_ACCESS, 'Existing admin permission');
-        check(Yii::createObject($def->handler) instanceof CleanupJobHandler, 'Configured handler resolves');
+        check(Yii::createObject($def->handler) instanceof \skeeks\cms\job\contracts\JobHandlerInterface, 'Configured handler resolves');
         check(($def->resourceKey)() === 'cms-job:cleanup' && ($def->dedupKey)() === $type, 'Shared lock, distinct operation dedup');
     }
     $db->createCommand()->insert('cms_agent', ['name' => 'legacy/unrelated', 'cms_site_id' => 1, 'is_system' => 1, 'is_active' => 1])->execute();
-    check(count($app->cmsAgent->getScheduleChanges()['create']) === 2, 'Exactly two new schedules');
+    check(count($app->cmsAgent->getScheduleChanges()['create']) === 3, 'Exactly three new schedules');
     $app->cmsAgent->loadAgents()->loadAgents();
-    check(CmsAgentModel::find()->count() == 3, 'Repeated initialization does not duplicate or delete unrelated schedule');
+    check(CmsAgentModel::find()->count() == 4, 'Repeated initialization does not duplicate or delete unrelated schedule');
     foreach ($types as $type => $interval) {
         $agent = CmsAgentModel::findOne(['name' => 'job:'.$type]);
         check($agent && $agent->job_type === $type && $agent->agent_interval == $interval && $agent->is_active == 1, 'Default schedule enabled');
@@ -119,7 +119,7 @@ try {
     $app->skeeks->site = (object)['id' => 2];
     $app->cmsAgent->loadAgents()->loadAgents();
     $other = CmsAgentModel::findOne(['name' => 'job:cms-job.cleanup', 'cms_site_id' => 2]);
-    check($other->jobDedupKey === $agent->jobDedupKey && CmsAgentModel::find()->count() == 5, 'Multiple sites share cleanup dedup without duplicate schedules');
+    check($other->jobDedupKey === $agent->jobDedupKey && CmsAgentModel::find()->count() == 7, 'Multiple sites share cleanup dedup without duplicate schedules');
     $app->skeeks->site = (object)['id' => 1];
 
     $active = insertRun(1, 'running', time() - 100);

@@ -30,6 +30,24 @@ class JobContext extends BaseObject
      */
     public $definition;
 
+    private $_workspace;
+
+    public function getWorkspace(): JobWorkspace
+    {
+        if ($this->_workspace === null) {
+            $this->_workspace = \Yii::$app->jobWorkspaces->open($this->run, (string)$this->run->execution_token);
+        }
+        return $this->_workspace;
+    }
+
+    public function hasWorkspace(): bool { return $this->_workspace !== null; }
+
+    /** Internal lifecycle hook; handlers must not release their execution protection. */
+    public function releaseWorkspace(): void
+    {
+        if ($this->_workspace !== null) { $this->_workspace->close(); }
+    }
+
     /**
      * @var array
      */

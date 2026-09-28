@@ -400,16 +400,38 @@ class WorkerController extends Controller
     /**
      * Удалить прогоны, у которых истёк срок хранения.
      */
-    public function actionCleanup()
+    public function actionCleanup($after = 0)
     {
-        $deleted = (new \skeeks\cms\job\runtime\JobHistoryCleanup())->cleanup();
+        $service = new \skeeks\cms\job\runtime\JobHistoryCleanup();
+        $deleted = $service->cleanup(500, null, (int)$after);
 
         $this->stdout("Удалено прогонов: {$deleted}\n");
+        $this->stdout("Последний проверенный ID: {$service->lastScannedId}\n");
 
         return ExitCode::OK;
     }
 
     /** Separate short-lived diagnostics from the longer run history. */
+    /** Dry-run by default; execute with positional dryRun=0 after reviewing the report. */
+    public function actionCleanupWorkspaces($dryRun = 1, $limit = 100, $after = 0)
+    {
+        if (!in_array((string)$dryRun, ['0', '1'], true)) { throw new \InvalidArgumentException('dryRun must be 0 or 1.'); }
+        $result = \Yii::$app->jobWorkspaces->sweep((bool)$dryRun, (int)$limit, (int)$after);
+        $this->stdout(json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n");
+        foreach ($result['items'] as $item) {
+            if ($item['reason'] === 'unsafe_or_error') { return ExitCode::UNSPECIFIED_ERROR; }
+        }
+        return ExitCode::OK;
+    }
+
+    public function actionWorkspaceHold($id, $hold = 1)
+    {
+        if (!in_array((string)$hold, ['0', '1'], true)) { throw new \InvalidArgumentException('hold must be 0 or 1.'); }
+        \Yii::$app->jobWorkspaces->setHold((int)$id, (bool)$hold);
+        $this->stdout("Состояние удержания рабочей папки обновлено.\n");
+        return ExitCode::OK;
+    }
+
     public function actionCleanupLogs()
     {
         $deleted = \Yii::$app->jobLogs->cleanup();

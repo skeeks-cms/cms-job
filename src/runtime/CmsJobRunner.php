@@ -412,6 +412,7 @@ class CmsJobRunner extends Component
             $this->safeFinalize($reporter);
             $outcome = $this->handleFailure($run, $definition, $token, $e);
         } finally {
+            $context->releaseWorkspace();
             if ($run->resource_key) {
                 $this->lockManager->release($run->resource_key, $token);
             }
@@ -450,6 +451,7 @@ class CmsJobRunner extends Component
         // Техническое сообщение не оставляет следа при успехе: иначе журнал
         // операций превратился бы в перечень каждого отправленного письма.
         if ($run->visibility === CmsJobRun::VISIBILITY_TRANSIENT
+            && (!\Yii::$app->has('jobWorkspaces') || !\Yii::$app->jobWorkspaces->protectsHistory((int)$run->id))
             && $status === CmsJobRun::STATUS_SUCCEEDED) {
             // Сначала владение, потом событие.
             //

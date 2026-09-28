@@ -8,6 +8,10 @@
  */
 $config = [
     'components' => [
+        'jobWorkspaces' => [
+            'class' => \skeeks\cms\job\runtime\JobWorkspaceStorage::class,
+            'basePath' => '@root/console/runtime/cms-jobs/workspaces',
+        ],
         'jobWorker' => [
             'class' => \skeeks\cms\job\transport\WorkerSettings::class,
         ],
@@ -134,11 +138,12 @@ $config = [
 foreach ([
     'cms-job.cleanup' => ['history', 'Очистка истории заданий', 86400],
     'cms-job.cleanup-logs' => ['logs', 'Очистка логов и отчётов заданий', 3600],
+    'cms-job.cleanup-workspaces' => ['workspaces', 'Очистка рабочих папок заданий', 3600],
 ] as $type => [$operation, $title, $interval]) {
     $config['components']['jobRegistry']['types'][$type] = [
         'type' => $type,
         'title' => $title,
-        'handler' => [
+        'handler' => $operation === 'workspaces' ? \skeeks\cms\job\handlers\WorkspaceCleanupJobHandler::class : [
             'class' => \skeeks\cms\job\handlers\CleanupJobHandler::class,
             'operation' => $operation,
         ],
@@ -149,7 +154,7 @@ foreach ([
         'idempotent' => true,
         'overlapPolicy' => 'skip',
         'permission' => \skeeks\cms\rbac\CmsManager::PERMISSION_ROLE_ADMIN_ACCESS,
-        // Both operations touch the same installation-wide history/log storage.
+        // Maintenance operations share installation-wide history and file ownership.
         'resourceKey' => static function () { return 'cms-job:cleanup'; },
         'dedupKey' => static function () use ($type) { return $type; },
     ];
