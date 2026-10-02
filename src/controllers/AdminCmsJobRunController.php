@@ -11,6 +11,7 @@ namespace skeeks\cms\job\controllers;
 use skeeks\cms\backend\actions\BackendModelAction;
 use skeeks\cms\backend\controllers\BackendModelStandartController;
 use skeeks\cms\backend\grid\BackendEntityLinkColumn;
+use skeeks\cms\job\contracts\JobRunReportInterface;
 use skeeks\cms\job\models\CmsJobRun;
 use skeeks\cms\queryfilters\QueryFiltersEvent;
 use skeeks\cms\rbac\CmsManager;
@@ -302,12 +303,59 @@ class AdminCmsJobRunController extends BackendModelStandartController
         /** @var CmsJobRun $model */
         $model = $action->model;
 
+        $report = $this->viewableReport($model);
+
         return $this->render('@skeeks/cms/job/views/admin-cms-job-run/view', [
             'model' => $model,
             'canCancel' => $this->canCancel($model),
             'canRetry' => $this->canRetry($model),
             'progressUrl' => Url::to(['progress', 'id' => $model->id]),
+            'report' => $report ? $report->render($model, $this->view, [
+                'detailsUrl' => Url::to(['progress', 'id' => $model->id, 'details' => '1']),
+            ]) : '',
         ]);
+    }
+
+    /**
+     * Предметный отчёт типа задания, если он есть и доступен пользователю.
+     *
+     * Отчёт регистрируется в определении типа, а не подменой этого
+     * контроллера: так отчёты нескольких пакетов не конфликтуют.
+     */
+    protected function viewableReport(CmsJobRun $model): ?JobRunReportInterface
+    {
+        $registry = \Yii::$app->jobs->getRegistry();
+        if (!$registry->has($model->job_type)) {
+            return null;
+        }
+
+        $report = $registry->get($model->job_type)->getReport();
+
+        return $report && $report->canView($model) ? $report : null;
+    }
+
+    /**
+     * Добавить к ответу опроса подробности предметных отчётов.
+     *
+     * Только по явному `details=1`: обычный опрос списков остаётся лёгким.
+     * Подробности ограничены текущим сайтом даже на многосайтовых установках.
+     */
+    protected function appendReportDetails(array $data): array
+    {
+        $models = CmsJobRun::find()
+            ->andWhere(['id' => array_keys($data), 'cms_site_id' => \Yii::$app->skeeks->site->id])
+            ->all();
+
+        foreach ($models as $model) {
+            $report = $this->viewableReport($model);
+            if ($report) {
+                $data[$model->id]['report'] = $report->details($model);
+            }
+        }
+
+        \Yii::$app->response->headers->set('Cache-Control', 'private, no-store');
+
+        return $data;
     }
 
     /**
@@ -455,6 +503,10 @@ class AdminCmsJobRunController extends BackendModelStandartController
                 'cancelRequested' => (bool)$row['cancel_requested_at'],
                 'finished' => in_array($row['status'], CmsJobRun::finishedStatuses(), true),
             ];
+        }
+
+        if ($data && \Yii::$app->request->get('details') === '1') {
+            $data = $this->appendReportDetails($data);
         }
 
         return ['success' => true, 'data' => $data];

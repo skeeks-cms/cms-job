@@ -7,6 +7,7 @@
  * @var bool                                   $canCancel
  * @var bool                                   $canRetry
  * @var string                                 $progressUrl
+ * @var string                                 $report HTML предметного отчёта типа задания
  */
 
 use skeeks\cms\backend\widgets\BackendSurfaceWidget;
@@ -39,6 +40,8 @@ $statusVariant = isset($statusVariants[$model->status]) ? $statusVariants[$model
 $percent = $model->getProgressPercent();
 $isActive = !$model->getIsFinished();
 ?>
+
+<?= $report ?? '' ?>
 
 <div class="sx-detail-layout" data-sx-job-run="<?= (int)$model->id ?>">
 

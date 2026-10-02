@@ -9,6 +9,7 @@
 namespace skeeks\cms\job;
 
 use skeeks\cms\job\contracts\JobHandlerInterface;
+use skeeks\cms\job\contracts\JobRunReportInterface;
 use skeeks\cms\job\models\CmsJobRun;
 use yii\base\BaseObject;
 use yii\base\InvalidConfigException;
@@ -131,6 +132,18 @@ class JobTypeDefinition extends BaseObject
      */
     public $dedupKey;
 
+    /**
+     * @var string|array|null Предметный отчёт по прогону: класс или конфигурация
+     *                        {@see JobRunReportInterface}. null — только
+     *                        стандартная карточка операции.
+     */
+    public $report;
+
+    /**
+     * @var JobRunReportInterface|false|null
+     */
+    private $_report;
+
     public function init()
     {
         parent::init();
@@ -163,6 +176,27 @@ class JobTypeDefinition extends BaseObject
         }
 
         return $handler;
+    }
+
+    /**
+     * @throws InvalidConfigException
+     */
+    public function getReport(): ?JobRunReportInterface
+    {
+        if ($this->_report === null) {
+            $this->_report = false;
+            if ($this->report) {
+                $report = \Yii::createObject($this->report);
+                if (!$report instanceof JobRunReportInterface) {
+                    throw new InvalidConfigException(
+                        "Report for job type '{$this->type}' must implement JobRunReportInterface."
+                    );
+                }
+                $this->_report = $report;
+            }
+        }
+
+        return $this->_report ?: null;
     }
 
     /**
